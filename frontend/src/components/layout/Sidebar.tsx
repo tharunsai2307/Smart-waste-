@@ -3,28 +3,41 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard, Trash2, Truck, Route, RecycleIcon,
-  Bell, BarChart3, FileText, Users, LogOut, Box, Zap, Globe
+  Bell, BarChart3, FileText, Users, LogOut, Box, Zap, Globe, Warehouse, Map,
+  Home, ClipboardCheck, TrendingUp
 } from 'lucide-react';
 import { useAppStore } from '../../store';
 
-const NAV_ITEMS = [
-  { path: '/dashboard',   label: 'Dashboard',    icon: LayoutDashboard },
-  { path: '/bins',        label: 'Smart Bins',   icon: Box },
-  { path: '/waste',       label: 'Waste',        icon: Trash2 },
-  { path: '/collections', label: 'Collections',  icon: Zap },
-  { path: '/vehicles',    label: 'Vehicles',     icon: Truck },
-  { path: '/routes',      label: 'Routes',       icon: Route },
-  { path: '/recycling',   label: 'Recycling',    icon: RecycleIcon },
-  { path: '/analytics',   label: 'Analytics',    icon: BarChart3 },
-  { path: '/alerts',      label: 'Alert Center', icon: Bell },
-  { path: '/residents',   label: 'Residents',    icon: Users },
-  { path: '/reports',     label: 'Reports',      icon: FileText },
-  { path: '/environment', label: 'Eco Impact',   icon: Globe },
+const ALL_NAV_ITEMS = [
+  // Resident items
+  { path: '/resident-portal', label: 'My Pickups', icon: Home, roles: ['RESIDENT', 'ADMIN'] },
+  // Cleaner items
+  { path: '/cleaner-ops', label: 'Field Ops', icon: ClipboardCheck, roles: ['CLEANER', 'ADMIN', 'LOCAL_HUB_MANAGER'] },
+  // Driver items
+  { path: '/driver-dashboard', label: 'Driver Portal', icon: ClipboardCheck, roles: ['DRIVER', 'ADMIN'] },
+  // Core Management items
+  { path: '/dashboard',   label: 'Dashboard',    icon: LayoutDashboard, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'DRIVER', 'RECYCLING_MANAGER'] },
+  { path: '/hubs',        label: 'Local Hubs',   icon: Warehouse, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'CLEANER', 'RESIDENT'] },
+  { path: '/collections', label: 'Operations',   icon: Zap, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
+  { path: '/bins',        label: 'Smart Bins',   icon: Box, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'CLEANER'] },
+  { path: '/waste',       label: 'Waste Ledger', icon: Trash2, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
+  { path: '/vehicles',    label: 'Vehicles',     icon: Truck, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'DRIVER'] },
+  { path: '/transfers',   label: 'Transfers',    icon: TrendingUp, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
+  { path: '/routes',      label: 'Routes',       icon: Route, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'DRIVER', 'CLEANER'] },
+  { path: '/recycling',   label: 'Recycling',    icon: RecycleIcon, roles: ['ADMIN', 'RECYCLING_MANAGER'] },
+  { path: '/alerts',      label: 'Alert Center', icon: Bell, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'CLEANER', 'RESIDENT'] },
+  { path: '/gis',         label: 'GIS Command',  icon: Map, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
+  { path: '/analytics',   label: 'Analytics',    icon: BarChart3, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
+  { path: '/residents',   label: 'Residents',    icon: Users, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
+  { path: '/environment', label: 'Eco Impact',   icon: Globe, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'RESIDENT'] },
+  { path: '/reports',     label: 'Reports',      icon: FileText, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
 ];
 
 const Sidebar: React.FC = () => {
   const { user, is3DMode, toggle3DMode, logout } = useAppStore();
   const navigate = useNavigate();
+
+  const navItems = ALL_NAV_ITEMS.filter(item => !user || !item.roles || item.roles.includes(user.role));
 
   const handleLogout = () => {
     logout();
@@ -63,7 +76,7 @@ const Sidebar: React.FC = () => {
 
       {/* Nav */}
       <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto">
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}

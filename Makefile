@@ -1,24 +1,18 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Iinclude -fno-lto
-SRC_DIR = src
-OBJ_DIR = src
-BIN_DIR = .
+LDFLAGS = -lws2_32
 
-SOURCES = $(wildcard $(SRC_DIR)/*.c)
-OBJECTS = $(SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
-TARGET = $(BIN_DIR)/smart_waste.exe
+CORE_SOURCES = src/user.c src/auth.c src/report.c src/utils.c src/resident.c src/waste.c src/bin.c src/vehicle.c src/collection.c src/alert.c src/recycling.c src/search_sort.c src/route.c src/reward.c src/hub.c src/incident.c src/transfer.c src/facility.c src/map_service.c
 
-all: $(TARGET)
+all: smart_waste.exe server.exe
 
-$(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) -o $@ $^
+smart_waste.exe: $(CORE_SOURCES) src/main.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+server.exe: $(CORE_SOURCES) src/mongoose.c src/server.c src/server_main.c
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
-	rm -f $(OBJ_DIR)/*.o $(TARGET)
-	rm -f data/*.dat backup/*.dat
+	rm -f smart_waste.exe server.exe
 
-run: $(TARGET)
-	./$(TARGET)
+.PHONY: all clean

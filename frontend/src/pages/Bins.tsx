@@ -41,10 +41,17 @@ const BinsPage: React.FC = () => {
             >
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-mono text-slate-500">BIN #{bin.binId}</span>
-                <span className={`px-2 py-0.5 rounded text-xs font-mono border`}
-                      style={{ color, background: `${color}15`, borderColor: `${color}30` }}>
-                  {bin.status}
-                </span>
+                <div className="flex items-center gap-2">
+                  {bin.dataSource && (
+                    <span className="px-2 py-0.5 rounded text-xs font-mono border" style={{ color: '#0ea5e9', background: 'rgba(14, 165, 233, 0.1)', borderColor: 'rgba(14, 165, 233, 0.3)' }}>
+                      Source: {bin.dataSource}
+                    </span>
+                  )}
+                  <span className={`px-2 py-0.5 rounded text-xs font-mono border`}
+                        style={{ color, background: `${color}15`, borderColor: `${color}30` }}>
+                    {bin.status}
+                  </span>
+                </div>
               </div>
 
               <div className="font-bold text-white text-lg mb-1">{bin.location}</div>

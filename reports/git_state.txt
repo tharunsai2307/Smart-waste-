@@ -1,0 +1,96 @@
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   Makefile
+	modified:   data/alerts.dat
+	modified:   data/collections.dat
+	modified:   data/residents.dat
+	modified:   data/users.dat
+	modified:   data/vehicles.dat
+	modified:   frontend/src/App.tsx
+	modified:   frontend/src/components/layout/Sidebar.tsx
+	modified:   frontend/src/pages/Bins.tsx
+	modified:   frontend/src/pages/Collections.tsx
+	modified:   frontend/src/pages/Login.tsx
+	modified:   frontend/src/pages/Waste.tsx
+	modified:   frontend/src/services/api.ts
+	modified:   frontend/src/types/index.ts
+	modified:   include/collection.h
+	modified:   include/config.h
+	modified:   include/recycling.h
+	modified:   include/report.h
+	modified:   include/types.h
+	modified:   include/user.h
+	modified:   include/utils.h
+	modified:   include/vehicle.h
+	modified:   server.exe
+	modified:   smart_waste.exe
+	modified:   src/alert.c
+	modified:   src/auth.c
+	modified:   src/bin.c
+	modified:   src/collection.c
+	modified:   src/main.c
+	modified:   src/recycling.c
+	modified:   src/report.c
+	modified:   src/resident.c
+	modified:   src/server.c
+	modified:   src/user.c
+	modified:   src/utils.c
+	modified:   src/vehicle.c
+	modified:   src/waste.c
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	backup/
+	compile_flags.txt
+	data/audit.dat
+	data/driver_profiles.dat
+	data/facilities.dat
+	data/hub_transactions.dat
+	data/hubs.dat
+	data/incidents.dat
+	data/processing_records.dat
+	data/recovery_records.dat
+	data/recycling_batches.dat
+	data/residual_records.dat
+	data/routes.dat
+	data/segregation_records.dat
+	data/transfers.dat
+	data/waste_classifications.dat
+	found.txt
+	frontend/src/components/recycling/
+	frontend/src/pages/CleanerFieldOps.tsx
+	frontend/src/pages/DriverDashboard.tsx
+	frontend/src/pages/Hubs.tsx
+	frontend/src/pages/RecyclingCommand.tsx
+	frontend/src/pages/ResidentPortal.tsx
+	frontend/src/pages/Transfers.tsx
+	frontend/src/pages/VehicleManagement.tsx
+	include/facility.h
+	include/hub.h
+	include/incident.h
+	include/map_service.h
+	include/transfer.h
+	list_users.exe
+	reports/
+	scratch/
+	src/facility.c
+	src/hub.c
+	src/incident.c
+	src/map_service.c
+	src/transfer.c
+	step96.txt
+	temp_head.c
+	test_phase3.exe
+	test_phase4.exe
+	test_phase5.exe
+	test_phase6.exe
+	tests/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+1a4db91 Initial commit: Added React frontend and C backend
+* main
+  remotes/origin/main

@@ -7,7 +7,7 @@ const WastePage: React.FC = () => {
   const { data: waste = [], refetch } = useQuery({ queryKey: ['waste'], queryFn: api.getWaste, refetchInterval: 8000 });
   const { data: bins = [] } = useQuery({ queryKey: ['bins'], queryFn: api.getBins });
 
-  const [form, setForm] = useState({ residentId: 1, binId: 101, wasteType: 'Mixed', quantity: 10, recyclable: 1 });
+  const [form, setForm] = useState({ residentId: 1, binId: 101, wasteType: 'Mixed', quantity: 10, recyclable: 1, dataSource: 'Manual' });
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState('');
 
@@ -77,6 +77,15 @@ const WastePage: React.FC = () => {
                      style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }} />
             </div>
 
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Data Source</label>
+              <select value={form.dataSource} onChange={e => setForm(p => ({ ...p, dataSource: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-lg text-sm text-white"
+                      style={{ background: '#0d1423', border: '1px solid rgba(255,255,255,0.1)' }}>
+                {['Manual', 'IoT'].map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+
             {success && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                           className="p-2 rounded-lg text-xs text-center text-emerald-400"
@@ -98,7 +107,7 @@ const WastePage: React.FC = () => {
           <div className="text-xs text-slate-500 tracking-widest mb-4">WASTE RECORDS</div>
           <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
             {waste.length === 0 ? (
-              <div className="text-center py-12 text-slate-600 text-sm">No waste records yet. Submit a report to get started.</div>
+              <div className="text-center py-12 text-slate-600 text-sm">No operational records available.</div>
             ) : waste.slice().reverse().slice(0, 20).map((w, i) => (
               <motion.div key={w.wasteId} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.02 }}
                           className="flex items-center gap-4 p-3 rounded-xl"
@@ -108,6 +117,12 @@ const WastePage: React.FC = () => {
                 <div className="flex-1 text-xs text-slate-400">Bin #{w.binId}</div>
                 <div className="text-sm font-bold font-mono text-white">{w.quantity.toFixed(1)} kg</div>
                 <div className="text-xs text-slate-600">{w.date}</div>
+                {w.dataSource && (
+                   <span className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider text-slate-400" 
+                         style={{ background: 'rgba(255,255,255,0.1)' }}>
+                     Source: {w.dataSource}
+                   </span>
+                )}
                 {w.recyclable && <span className="text-xs text-emerald-500">♻</span>}
               </motion.div>
             ))}

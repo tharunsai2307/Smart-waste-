@@ -8,6 +8,8 @@
 #include "hub.h"
 #include "user.h"
 #include "resident.h"
+#include "location.h"
+#include "gis_route.h"
 #include "waste.h"
 #include "bin.h"
 #include "vehicle.h"
@@ -826,6 +828,60 @@ else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))           
     else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/facilities"), NULL))   handleGetAllFacilities(c);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/batches"), NULL))      handleGetRecyclingBatches(c);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/incidents"), NULL))              handleGetAllIncidents(c);
+
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/locations"), NULL)) {
+        GeoLocation list[100];
+        int count = getAllGeoLocations(list, 100);
+        char *json = malloc(count * 200 + 50);
+        strcpy(json, "[");
+        for (int i = 0; i < count; i++) {
+            char obj[256];
+            snprintf(obj, sizeof(obj), "{\"locationId\":%d,\"type\":%d,\"referenceId\":%d,\"lat\":%f,\"lon\":%f}%s",
+                        list[i].locationId, list[i].type, list[i].referenceId, list[i].latitude, list[i].longitude,
+                        (i == count - 1) ? "" : ",");
+            strcat(json, obj);
+        }
+        strcat(json, "]");
+        sendJsonResponse(c, 200, json);
+        free(json);
+    }
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/nearest-hubs"), NULL)) {
+        char latStr[32] = {0}, lonStr[32] = {0}, radiusStr[32] = {0};
+        mg_http_get_var(&hm->query, "lat", latStr, sizeof(latStr));
+        mg_http_get_var(&hm->query, "lon", lonStr, sizeof(lonStr));
+        mg_http_get_var(&hm->query, "radius", radiusStr, sizeof(radiusStr));
+        double lat = atof(latStr);
+        double lon = atof(lonStr);
+        double radius = atof(radiusStr);
+        if (radius == 0.0) radius = 5.0;
+        
+        LocalHub hubs[10];
+        double distances[10];
+        int count = findNearestHubs(lat, lon, radius, hubs, distances, 10);
+        
+        char *json = malloc(count * 200 + 50);
+        strcpy(json, "[");
+        for (int i = 0; i < count; i++) {
+            char obj[256];
+            snprintf(obj, sizeof(obj), "{\"hubId\":%d,\"name\":\"%s\",\"distanceKm\":%.2f}%s",
+                        hubs[i].hubId, hubs[i].name, distances[i],
+                        (i == count - 1) ? "" : ",");
+            strcat(json, obj);
+        }
+        strcat(json, "]");
+        sendJsonResponse(c, 200, json);
+        free(json);
+    }
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/nearby"), NULL)) {
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Nearby fetched\"}");
+    }
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/routes"), NULL)) {
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Routes fetched\"}");
+    }
+    else if (isPost && mg_match(hm->uri, mg_str("/api/gis/*"), NULL)) {
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"GIS Action\"}");
+    }
+
     else if (isPost && mg_match(hm->uri, mg_str("/api/*"), NULL))                      handlePostAction(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/bins"), NULL))                   handleGetBins(c);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/vehicles"), NULL))               handleGetVehicles(c);
