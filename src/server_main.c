@@ -10,8 +10,14 @@
 #include "recycling.h"
 #include "location.h"
 #include "gis_route.h"
+#include "geospatial.h"
+#include "route_engine.h"
+#include <stdio.h>
 
-int main() {
+int main(void) {
+    printf("Initializing Smart Waste Management System...\n");
+    
+    // Initialize data files
     initUsersData();
     initResidentsData();
     initWasteData();
@@ -23,6 +29,7 @@ int main() {
     initRecyclingData();
     initLocationsData();
     initGisRoutesData();
+    initRouteEngineData();
 
     startServer("8080");
     return 0;

@@ -527,4 +527,101 @@ typedef struct {
     char status[20];
 } RouteStop;
 
+
+// Phase 7: Intelligent Route
+typedef enum {
+    ROUTE_PLANNED, ROUTE_ASSIGNED, ROUTE_ACCEPTED, ROUTE_EN_ROUTE,
+    ROUTE_ARRIVED, ROUTE_COLLECTING, ROUTE_COMPLETED, ROUTE_DECLINED,
+    ROUTE_CANCELLED, ROUTE_FAILED, ROUTE_RESCHEDULED, ROUTE_PRE_TRIP_CHECK, ROUTE_READY, ROUTE_PAUSED, ROUTE_RETURNING, ROUTE_AT_DESTINATION, ROUTE_LOAD_VERIFIED, ROUTE_ABORTED, ROUTE_VEHICLE_BREAKDOWN, ROUTE_DRIVER_UNAVAILABLE, ROUTE_ACCESS_BLOCKED, ROUTE_EMERGENCY
+} RouteStatus;
+
+typedef enum {
+    STOP_PLANNED, STOP_EN_ROUTE, STOP_ARRIVED, STOP_SERVICING,
+    STOP_COMPLETED, STOP_SKIPPED, STOP_FAILED, STOP_RESCHEDULED
+} StopStatus;
+
+typedef struct {
+    int routeId;
+    char routeType[30];
+    int driverId;
+    int vehicleId;
+    int originId;
+    int destinationId;
+    float totalDistanceKm;
+    float estimatedDurationMinutes;
+    float totalPlannedLoadKg;
+    float vehicleCapacityKg;
+    float utilizationPercentage;
+    RouteStatus status;
+    char createdAt[32];
+    char updatedAt[32];
+} Route;
+
+typedef struct {
+    int routeStopId;
+    int routeId;
+    int sequenceNumber;
+    int locationId;
+    int referenceId;
+    char stopType[30];
+    int priority;
+    float estimatedWeightKg;
+    float actualWeightKg;
+    char arrivalTime[30];
+    char serviceStartTime[30];
+    char serviceCompletedTime[30];
+    StopStatus status;
+    char notes[150];
+} RouteEngineStop;
+
+typedef struct {
+    int eventId;
+    int routeId;
+    int actorId;
+    char timestamp[32];
+    double latitude;
+    double longitude;
+    char eventType[30];
+    char notes[150];
+} RouteEvent;
+
+
+
+// Phase 8: Operations & QR Tracking
+typedef enum { INSPECT_PASS, INSPECT_FAIL, INSPECT_REQUIRES_ATTENTION } VehicleInspectionStatus;
+typedef enum { QR_SUCCESS, QR_FAILED } QREventResult;
+
+typedef struct {
+    int inspectionId;
+    int vehicleId;
+    int driverId;
+    int routeId;
+    char inspectionDate[32];
+    int brakes;
+    int tires;
+    int lights;
+    int mirrors;
+    int horn;
+    int hydraulicSystem;
+    int bodyCondition;
+    int fuelLevel;
+    int odometer;
+    char remarks[150];
+    VehicleInspectionStatus inspectionStatus;
+    char timestamp[32];
+} VehicleInspection;
+
+typedef struct {
+    int eventId;
+    char qrType[30];
+    int entityId;
+    int scannedBy;
+    char scanTimestamp[32];
+    int routeId;
+    int vehicleId;
+    int locationId;
+    QREventResult result;
+    char failureReason[150];
+} QREvent;
+
 #endif

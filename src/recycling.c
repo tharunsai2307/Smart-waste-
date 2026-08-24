@@ -129,8 +129,8 @@ void touchFile(const char* filename) {
 
 int initRecyclingPhase5() {
     touchFile(RECYCLING_BATCHES_FILE);
-    touchFile(WASTE_CLASSIFICATIONS_FILE);
-    touchFile(SEGREGATION_RECORDS_FILE);
+    touchFile(CLASSIFICATIONS_FILE);
+    touchFile(SEGREGATIONS_FILE);
     touchFile(PROCESSING_RECORDS_FILE);
     touchFile(RECOVERY_RECORDS_FILE);
     touchFile(RESIDUAL_RECORDS_FILE);
@@ -138,6 +138,7 @@ int initRecyclingPhase5() {
 }
 
 int receiveTransferAtFacility(int transferId, int facilityId, int operatorId) {
+    (void)operatorId;
     WasteTransfer t;
     if (!getTransferById(transferId, &t)) return 0;
     
@@ -162,6 +163,7 @@ int receiveTransferAtFacility(int transferId, int facilityId, int operatorId) {
 }
 
 int recordReceivedWeight(int transferId, float receivedWeightKg, const char* measurementSource, int operatorId, float varianceThresholdPct) {
+    (void)measurementSource;
     WasteTransfer t;
     if (!getTransferById(transferId, &t)) return 0;
     
@@ -202,6 +204,7 @@ int recordReceivedWeight(int transferId, float receivedWeightKg, const char* mea
 }
 
 int processTransferDecision(int transferId, const char* decision, const char* reason, int operatorId) {
+    (void)operatorId;
     WasteTransfer t;
     if (!getTransferById(transferId, &t)) return 0;
     
@@ -325,7 +328,7 @@ int getBatchesByFacility(int facilityId, RecyclingBatch *list, int maxCount) {
 }
 
 int addWasteClassification(WasteClassification *wc) {
-    FILE *fp = fopen(WASTE_CLASSIFICATIONS_FILE, "rb");
+    FILE *fp = fopen(CLASSIFICATIONS_FILE, "rb");
     int maxId = 0;
     if (fp) {
         WasteClassification temp;
@@ -339,7 +342,7 @@ int addWasteClassification(WasteClassification *wc) {
     getCurrentTimestamp(now, sizeof(now));
     strncpy(wc->timestamp, now, sizeof(wc->timestamp)-1);
     
-    fp = fopen(WASTE_CLASSIFICATIONS_FILE, "ab");
+    fp = fopen(CLASSIFICATIONS_FILE, "ab");
     if (!fp) return 0;
     fwrite(wc, sizeof(WasteClassification), 1, fp);
     fclose(fp);
@@ -347,7 +350,7 @@ int addWasteClassification(WasteClassification *wc) {
 }
 
 int getBatchesClassifications(int batchId, WasteClassification *list, int maxCount) {
-    FILE *fp = fopen(WASTE_CLASSIFICATIONS_FILE, "rb");
+    FILE *fp = fopen(CLASSIFICATIONS_FILE, "rb");
     if (!fp) return 0;
     int count = 0;
     WasteClassification temp;
@@ -359,7 +362,7 @@ int getBatchesClassifications(int batchId, WasteClassification *list, int maxCou
 }
 
 int addSegregationRecord(SegregationRecord *sr) {
-    FILE *fp = fopen(SEGREGATION_RECORDS_FILE, "rb");
+    FILE *fp = fopen(SEGREGATIONS_FILE, "rb");
     int maxId = 0;
     if (fp) {
         SegregationRecord temp;
@@ -373,7 +376,7 @@ int addSegregationRecord(SegregationRecord *sr) {
     getCurrentTimestamp(now, sizeof(now));
     strncpy(sr->timestamp, now, sizeof(sr->timestamp)-1);
     
-    fp = fopen(SEGREGATION_RECORDS_FILE, "ab");
+    fp = fopen(SEGREGATIONS_FILE, "ab");
     if (!fp) return 0;
     fwrite(sr, sizeof(SegregationRecord), 1, fp);
     fclose(fp);
@@ -466,6 +469,7 @@ int addResidualRecord(ResidualRecord *rr) {
 }
 
 int completeRecyclingBatch(int batchId, int operatorId) {
+    (void)operatorId;
     RecyclingBatch batch;
     if (!getBatchById(batchId, &batch)) return 0;
     

@@ -15,6 +15,7 @@ import RoutesPage from './pages/Routes';
 import RecyclingCommand from './pages/RecyclingCommand';
 import AlertsPage from './pages/Alerts';
 import AnalyticsPage from './pages/Analytics';
+import ExecutiveCommand from './pages/ExecutiveCommand';
 import ResidentsPage from './pages/Residents';
 import EnvironmentPage from './pages/Environment';
 import ReportsPage from './pages/Reports';
@@ -41,6 +42,7 @@ function RoleDefaultRedirect() {
   if (user?.role === 'RESIDENT') return <Navigate to="/resident-portal" replace />;
   if (user?.role === 'CLEANER') return <Navigate to="/cleaner-ops" replace />;
   if (user?.role === 'DRIVER') return <Navigate to="/driver-dashboard" replace />;
+  if (user?.role === 'ADMIN') return <Navigate to="/executive-command" replace />;
   return <Navigate to="/dashboard" replace />;
 }
 
@@ -71,6 +73,7 @@ function AppContent() {
               <Route path="/login" element={user ? <RoleDefaultRedirect /> : <LoginPage />} />
               <Route path="/" element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
                 <Route index element={<RoleDefaultRedirect />} />
+                <Route path="executive-command" element={<ExecutiveCommand />} />
                 <Route path="dashboard"        element={<Dashboard />} />
                 <Route path="resident-portal" element={<ResidentPortal />} />
                 <Route path="cleaner-ops"      element={<CleanerFieldOps />} />
@@ -85,7 +88,8 @@ function AppContent() {
                 <Route path="recycling"        element={<RecyclingCommand />} />
                 <Route path="gis"              element={<GISCommand />} />
                 <Route path="alerts"           element={<AlertsPage />} />
-                <Route path="analytics"        element={<AnalyticsPage />} />
+                <Route path="analytics"        element={<ExecutiveCommand />} />
+                <Route path="analytics-legacy" element={<AnalyticsPage />} />
                 <Route path="residents"        element={<ResidentsPage />} />
                 <Route path="environment"      element={<EnvironmentPage />} />
                 <Route path="reports"          element={<ReportsPage />} />

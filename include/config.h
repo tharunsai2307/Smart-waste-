@@ -41,27 +41,33 @@
 #define DELIVERY_VARIANCE_THRESHOLD_KG 25.0f
 
 // Phase 5 File Paths
-#define RECYCLING_BATCHES_FILE "data/recycling_batches.dat"
-#define WASTE_CLASSIFICATIONS_FILE "data/waste_classifications.dat"
-#define SEGREGATION_RECORDS_FILE "data/segregation_records.dat"
+#define CLASSIFICATIONS_FILE "data/waste_classifications.dat"
+#define SEGREGATIONS_FILE "data/segregation_records.dat"
 #define PROCESSING_RECORDS_FILE "data/processing_records.dat"
 #define RECOVERY_RECORDS_FILE "data/recovery_records.dat"
 #define RESIDUAL_RECORDS_FILE "data/residual_records.dat"
+#define RECYCLING_BATCHES_FILE "data/recycling_batches.dat"
+#define LOCATIONS_FILE "data/locations.dat"
+#define SERVICE_AREAS_FILE "data/service_areas.dat"
 
 // Phase 5 Thresholds
 #define RECEIVING_VARIANCE_THRESHOLD_PCT 5.0f
 
-// Phase 6
+// Phase 7: Routes
 #define ROUTES_FILE "data/routes.dat"
+#define ROUTE_STOPS_FILE "data/route_stops.dat"
+#define ROUTE_EVENTS_FILE "data/route_events.dat"
 #define GEOFENCE_RADIUS_METERS 200.0f
 
 #define MAX_USERS 100
 
-
-#define LOCATIONS_FILE "data/locations.dat"
-#define SERVICE_AREAS_FILE "data/service_areas.dat"
 #define VEHICLE_LOCATIONS_FILE "data/vehicle_locations.dat"
-#define ROUTES_FILE "data/routes.dat"
-#define ROUTE_STOPS_FILE "data/route_stops.dat"
+
+
+// Phase 8: Operations Tracking
+#define VEHICLE_INSPECTIONS_FILE "data/vehicle_inspections.dat"
+#define QR_EVENTS_FILE "data/qr_events.dat"
+#define OPERATIONAL_EVENTS_FILE "data/operational_events.dat"
+#define VEHICLE_LOADS_FILE "data/vehicle_loads.dat"
 
 #endif

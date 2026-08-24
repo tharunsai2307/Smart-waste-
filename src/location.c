@@ -192,6 +192,7 @@ int findNearbyFacilities(double lat, double lon, double radiusKm, TransportFacil
 }
 
 int assignHubForResident(int residentId, double lat, double lon) {
+    (void)residentId;
     // 1. Basic distance-based assignment for now
     LocalHub nearest[1];
     double dist[1];
