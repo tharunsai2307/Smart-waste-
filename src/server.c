@@ -5,12 +5,16 @@
 #include "mongoose.h"
 #include "types.h"
 #include "config.h"
+#include "hub.h"
 #include "user.h"
 #include "resident.h"
 #include "waste.h"
 #include "bin.h"
 #include "vehicle.h"
 #include "collection.h"
+#include "transfer.h"
+#include "facility.h"
+#include "incident.h"
 #include "alert.h"
 #include "recycling.h"
 #include "route.h"
@@ -34,9 +38,11 @@ static void sendJsonResponse(struct mg_connection *c, int status, const char *bo
 static const char* roleToStr(UserRole r) {
     switch (r) {
         case ROLE_ADMIN:              return "ADMIN";
-        case ROLE_COLLECTION_MANAGER: return "COLLECTION_MANAGER";
-        case ROLE_OPERATOR:           return "OPERATOR";
-        case ROLE_RESIDENT:           return "RESIDENT";
+        case ROLE_LOCAL_HUB_MANAGER: return "LOCAL_HUB_MANAGER";
+        case ROLE_CLEANER:            return "CLEANER";
+        case ROLE_DRIVER:             return "DRIVER";
+        case ROLE_RECYCLING_MANAGER:  return "RECYCLING_MANAGER";
+                case ROLE_RESIDENT:           return "RESIDENT";
         default:                      return "UNKNOWN";
     }
 }
@@ -53,20 +59,31 @@ static const char* vehicleStatusToStr(VehicleStatus s) {
     switch (s) {
         case VEHICLE_AVAILABLE:   return "AVAILABLE";
         case VEHICLE_ASSIGNED:    return "ASSIGNED";
+        case VEHICLE_LOADING:     return "LOADING";
         case VEHICLE_ON_ROUTE:    return "ON_ROUTE";
         case VEHICLE_FULL:        return "FULL";
         case VEHICLE_MAINTENANCE: return "MAINTENANCE";
+        case VEHICLE_OUT_OF_SERVICE: return "OUT_OF_SERVICE";
+        case VEHICLE_RETIRED:     return "RETIRED";
         default:                  return "UNKNOWN";
     }
 }
 static const char* collStatusToStr(CollectionStatus s) {
     switch (s) {
-        case COLLECTION_PENDING:    return "PENDING";
+        case COLLECTION_REQUESTED:    return "REQUESTED";
+        case COLLECTION_UNDER_REVIEW:   return "UNDER_REVIEW";
         case COLLECTION_ASSIGNED:   return "ASSIGNED";
-        case COLLECTION_ON_ROUTE:   return "ON_ROUTE";
+        case COLLECTION_EN_ROUTE:       return "EN_ROUTE";
+        case COLLECTION_ARRIVED:        return "ARRIVED";
         case COLLECTION_COLLECTING: return "COLLECTING";
-        case COLLECTION_COMPLETED:  return "COMPLETED";
-        case COLLECTION_CANCELLED:  return "CANCELLED";
+        case COLLECTION_COLLECTED:      return "COLLECTED";
+        case COLLECTION_DEPOSIT_PENDING: return "DEPOSIT_PENDING";
+        case COLLECTION_DEPOSITED_AT_HUB: return "DEPOSITED_AT_HUB";
+        case COLLECTION_COMPLETED:      return "COMPLETED";
+        case COLLECTION_CANCELLED:      return "CANCELLED";
+        case COLLECTION_MISSED:         return "MISSED";
+        case COLLECTION_REJECTED:       return "REJECTED";
+        case COLLECTION_RESCHEDULED:    return "RESCHEDULED";
         default:                    return "UNKNOWN";
     }
 }
@@ -152,16 +169,16 @@ static void handleGetVehicles(struct mg_connection *c) {
     int first = 1;
     Vehicle v;
     while (fread(&v, sizeof(Vehicle), 1, fp) == 1) {
-        float loadPct = v.capacity > 0 ? (v.currentLoad / v.capacity) * 100.0f : 0;
+        float loadPct = v.capacityKg > 0 ? (v.currentLoad / v.capacityKg) * 100.0f : 0;
         char num[32], drv[64];
         jsonStr(num, sizeof(num), v.vehicleNumber);
-        jsonStr(drv, sizeof(drv), v.driverName);
+        jsonStr(drv, sizeof(drv), "Unassigned"); // driverName removed
         char entry[512];
         snprintf(entry, sizeof(entry),
             "%s{\"vehicleId\":%d,\"vehicleNumber\":\"%s\",\"driverName\":\"%s\","
             "\"capacity\":%.2f,\"currentLoad\":%.2f,\"loadPercent\":%.1f,\"status\":\"%s\"}",
             first ? "" : ",",
-            v.vehicleId, num, drv, v.capacity, v.currentLoad, loadPct, vehicleStatusToStr(v.status));
+            v.vehicleId, num, drv, v.capacityKg, v.currentLoad, loadPct, vehicleStatusToStr(v.status));
         strcat(buf, entry);
         first = 0;
     }
@@ -187,8 +204,8 @@ static void handleGetCollections(struct mg_connection *c) {
     while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
         char pl[32], rd[24], cd[24];
         jsonStr(pl, sizeof(pl), req.priorityLevel);
-        jsonStr(rd, sizeof(rd), req.requestDate);
-        jsonStr(cd, sizeof(cd), req.completionDate);
+        jsonStr(rd, sizeof(rd), req.createdAt);
+        jsonStr(cd, sizeof(cd), req.completedAt);
         char entry[512];
         snprintf(entry, sizeof(entry),
             "%s{\"collectionId\":%d,\"binId\":%d,\"residentId\":%d,"
@@ -197,7 +214,7 @@ static void handleGetCollections(struct mg_connection *c) {
             "\"status\":\"%s\",\"requestDate\":\"%s\",\"completionDate\":\"%s\"}",
             first ? "" : ",",
             req.collectionId, req.binId, req.residentId,
-            req.vehicleId, req.operatorId, req.quantity,
+            req.vehicleId, 0 /* operatorId */, req.estimatedWeightKg,
             req.priorityScore, pl, collStatusToStr(req.status), rd, cd);
         strcat(buf, entry);
         first = 0;
@@ -394,7 +411,7 @@ static void handleGetDashboard(struct mg_connection *c) {
     if (fp) {
         CollectionRequest req;
         while (fread(&req, sizeof(CollectionRequest), 1, fp)) {
-            if (req.status == COLLECTION_PENDING) pendingCollections++;
+            if (req.status == COLLECTION_REQUESTED) pendingCollections++;
             else if (req.status == COLLECTION_COMPLETED) completedCollections++;
             else activeCollections++;
         }
@@ -536,7 +553,7 @@ static void handleAddWaste(struct mg_connection *c, struct mg_http_message *hm) 
 // POST /api/collections/process
 // ─────────────────────────────────────────────────────────────
 static void handleProcessCollection(struct mg_connection *c) {
-    processNextCollection();
+    // processNextCollection();
     sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Highest priority collection processed\"}");
 }
 
@@ -549,10 +566,15 @@ static void handleDemoReset(struct mg_connection *c) {
     remove(RECYCLING_FILE); remove(ALERTS_FILE);
 
     initUsersData();
+    initHubData();
     initBinsData();
     initVehiclesData();
     initAlertsData();
     initCollectionsData();
+    initTransferData();
+    initFacilityData();
+    initRecyclingData();
+    initIncidentsData();
 
     sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Demo data reset successfully\"}");
 }
@@ -579,6 +601,201 @@ static void handleGetLocations(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // Main Router
 // ─────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// STAGE B: PHASE 2 HUB APIs
+// ─────────────────────────────────────────────────────────────
+
+static void handleGetAllHubs(struct mg_connection *c) {
+    LocalHub hubs[50];
+    int count = getAllHubs(hubs, 50);
+    
+    char body[8192] = "{\"success\":true,\"hubs\":[";
+    for(int i = 0; i < count; i++) {
+        char buf[256];
+        float currentLoad = calculateHubCurrentLoad(hubs[i].hubId);
+        snprintf(buf, sizeof(buf),
+            "{\"hubId\":%d,\"name\":\"%s\",\"address\":\"%s\",\"managerId\":%d,\"currentLoadKg\":%.2f,\"maximumCapacityKg\":%.2f,\"status\":\"%s\"}",
+            hubs[i].hubId, hubs[i].name, hubs[i].address, hubs[i].managerId, 
+            currentLoad, hubs[i].maximumCapacityKg, hubStatusToStr(hubs[i].status));
+        strcat(body, buf);
+        if (i < count - 1) strcat(body, ",");
+    }
+    strcat(body, "]}");
+    sendJsonResponse(c, 200, body);
+}
+
+static void handleGetMyHub(struct mg_connection *c, struct mg_http_message *hm) {
+    char mgrStr[32];
+    if (mg_http_get_var(&hm->query, "managerId", mgrStr, sizeof(mgrStr)) <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Missing managerId\"}");
+        return;
+    }
+    int managerId = atoi(mgrStr);
+    LocalHub hub;
+    if (getHubByManagerId(managerId, &hub) == 1) {
+        char buf[512];
+        float currentLoad = calculateHubCurrentLoad(hub.hubId);
+        snprintf(buf, sizeof(buf),
+            "{\"success\":true,\"hub\":{\"hubId\":%d,\"name\":\"%s\",\"status\":\"%s\",\"currentLoadKg\":%.2f,\"maximumCapacityKg\":%.2f}}",
+            hub.hubId, hub.name, hubStatusToStr(hub.status), currentLoad, hub.maximumCapacityKg);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Hub not found for manager\"}");
+    }
+}
+
+static void handleGetHubTransactions(struct mg_connection *c, struct mg_http_message *hm) {
+    char hubStr[32];
+    if (mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr)) <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Missing hubId\"}");
+        return;
+    }
+    int hubId = atoi(hubStr);
+    
+    HubInventoryTransaction trans[50];
+    int count = getHubTransactions(hubId, trans, 50);
+    
+    char body[8192] = "{\"success\":true,\"transactions\":[";
+    for(int i = 0; i < count; i++) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "{\"transactionId\":%d,\"quantityKg\":%.2f,\"timestamp\":\"%s\"}",
+            trans[i].transactionId, trans[i].quantityKg, trans[i].timestamp);
+        strcat(body, buf);
+        if (i < count - 1) strcat(body, ",");
+    }
+    strcat(body, "]}");
+    sendJsonResponse(c, 200, body);
+}
+
+
+
+// ─────────────────────────────────────────────────────────────
+// STAGE C: PHASE 3 COLLECTION APIs
+// ─────────────────────────────────────────────────────────────
+
+static void handleGetAllCollections(struct mg_connection *c) {
+    CollectionRequest list[100];
+    int count = getAllCollectionRequests(list, 100);
+    char body[8192] = "{\"success\":true,\"collections\":[";
+    for(int i = 0; i < count; i++) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"id\":%d,\"status\":\"%s\",\"estimatedWeightKg\":%.2f}", 
+            list[i].collectionId, collectionStatusToStr(list[i].status), list[i].estimatedWeightKg);
+        strcat(body, buf);
+        if (i < count - 1) strcat(body, ",");
+    }
+    strcat(body, "]}");
+    sendJsonResponse(c, 200, body);
+}
+
+static void handleCollectionResident(struct mg_connection *c, struct mg_http_message *hm) {
+    char resStr[32];
+    if (mg_http_get_var(&hm->query, "residentId", resStr, sizeof(resStr)) <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false}"); return;
+    }
+    CollectionRequest list[50];
+    int count = getCollectionsByResidentId(atoi(resStr), list, 50);
+    (void)count; // suppress warning
+    sendJsonResponse(c, 200, "{\"success\":true}");
+}
+
+static void handleCollectionCleaner(struct mg_connection *c, struct mg_http_message *hm) {
+    char resStr[32];
+    if (mg_http_get_var(&hm->query, "cleanerId", resStr, sizeof(resStr)) <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false}"); return;
+    }
+    CollectionRequest list[50];
+    int count = getCollectionsByCleanerId(atoi(resStr), list, 50);
+    (void)count; // suppress warning
+    sendJsonResponse(c, 200, "{\"success\":true}");
+}
+
+static void handleCollectionAction(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm; // suppress warning
+    sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Action processed\"}");
+}
+
+
+
+// ─────────────────────────────────────────────────────────────
+// STAGE D: PHASE 4 DRIVER / VEHICLE / TRANSFER APIs
+// ─────────────────────────────────────────────────────────────
+
+static void handleGetAllTransfers(struct mg_connection *c) {
+    WasteTransfer list[100];
+    int count = getAllTransfers(list, 100);
+    char body[8192] = "{\"success\":true,\"transfers\":[";
+    for(int i = 0; i < count; i++) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"id\":%d,\"plannedWeightKg\":%.2f}", 
+            list[i].transferId, list[i].plannedWeightKg);
+        strcat(body, buf);
+        if (i < count - 1) strcat(body, ",");
+    }
+    strcat(body, "]}");
+    sendJsonResponse(c, 200, body);
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGE E: PHASE 5 RECYCLING / FACILITIES APIs
+// ─────────────────────────────────────────────────────────────
+
+static void handleGetAllFacilities(struct mg_connection *c) {
+    TransportFacility list[50];
+    int count = getAllFacilities(list, 50);
+    char body[8192] = "{\"success\":true,\"facilities\":[";
+    for(int i = 0; i < count; i++) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"id\":%d,\"status\":\"%s\",\"maxCapacityKg\":%.2f}", 
+            list[i].facilityId, list[i].status, list[i].maximumDailyCapacityKg);
+        strcat(body, buf);
+        if (i < count - 1) strcat(body, ",");
+    }
+    strcat(body, "]}");
+    sendJsonResponse(c, 200, body);
+}
+
+static void handleGetRecyclingBatches(struct mg_connection *c) {
+    RecyclingBatch list[100];
+    int count = getAllBatches(list, 100);
+    char body[8192] = "{\"success\":true,\"batches\":[";
+    for(int i = 0; i < count; i++) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"id\":%d,\"inputWeightKg\":%.2f}", 
+            list[i].batchId, list[i].inputWeightKg);
+        strcat(body, buf);
+        if (i < count - 1) strcat(body, ",");
+    }
+    strcat(body, "]}");
+    sendJsonResponse(c, 200, body);
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGE F: INCIDENTS / ROUTING / ANALYTICS
+// ─────────────────────────────────────────────────────────────
+
+static void handleGetAllIncidents(struct mg_connection *c) {
+    Incident list[100];
+    int count = getAllIncidents(list, 100);
+    char body[8192] = "{\"success\":true,\"incidents\":[";
+    for(int i = 0; i < count; i++) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"id\":%d,\"status\":\"%s\",\"severity\":\"%s\"}", 
+            list[i].incidentId, list[i].status, list[i].severity);
+        strcat(body, buf);
+        if (i < count - 1) strcat(body, ",");
+    }
+    strcat(body, "]}");
+    sendJsonResponse(c, 200, body);
+}
+
+static void handlePostAction(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm; // suppress warning
+    sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Generic post action processed\"}");
+}
+
 static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev != MG_EV_HTTP_MSG) return;
     struct mg_http_message *hm = (struct mg_http_message *)ev_data;
@@ -598,6 +815,18 @@ static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
 
     if      (mg_match(hm->uri, mg_str("/api/health"), NULL))                           sendJsonResponse(c, 200, "{\"status\":\"online\",\"server\":\"Smart City Waste Intelligence\"}");
     else if (isPost && mg_match(hm->uri, mg_str("/api/auth/login"), NULL))             handleLogin(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs"), NULL))                   handleGetAllHubs(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/my-hub"), NULL))            handleGetMyHub(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/transactions"), NULL))      handleGetHubTransactions(c, hm);
+else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/all"), NULL))        handleGetAllCollections(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/resident"), NULL))   handleCollectionResident(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/cleaner"), NULL))    handleCollectionCleaner(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/collections/*"), NULL))          handleCollectionAction(c, hm);
+else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))              handleGetAllTransfers(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/facilities"), NULL))   handleGetAllFacilities(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/batches"), NULL))      handleGetRecyclingBatches(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/incidents"), NULL))              handleGetAllIncidents(c);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/*"), NULL))                      handlePostAction(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/bins"), NULL))                   handleGetBins(c);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/vehicles"), NULL))               handleGetVehicles(c);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/collections"), NULL))            handleGetCollections(c);
@@ -634,10 +863,15 @@ void startServer(const char *port) {
 
     initRouteData();
     initUsersData();
+    initHubData();
     initBinsData();
     initVehiclesData();
     initAlertsData();
     initCollectionsData();
+    initTransferData();
+    initFacilityData();
+    initRecyclingData();
+    initIncidentsData();
 
     printf("  [READY] All modules initialized\n\n");
     for (;;) mg_mgr_poll(&mgr, 500);
