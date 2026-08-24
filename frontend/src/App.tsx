@@ -16,6 +16,7 @@ import RecyclingCommand from './pages/RecyclingCommand';
 import AlertsPage from './pages/Alerts';
 import AnalyticsPage from './pages/Analytics';
 import ExecutiveCommand from './pages/ExecutiveCommand';
+import IncidentCommand from './pages/IncidentCommand';
 import ResidentsPage from './pages/Residents';
 import EnvironmentPage from './pages/Environment';
 import ReportsPage from './pages/Reports';
@@ -51,7 +52,6 @@ function AppContent() {
   const [booted, setBooted] = useState(false);
   const [bootDismissed, setBootDismissed] = useState(false);
 
-  // Show boot screen only once per session (when no user logged in)
   const showBoot = !booted && !user;
 
   return (
@@ -74,6 +74,8 @@ function AppContent() {
               <Route path="/" element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
                 <Route index element={<RoleDefaultRedirect />} />
                 <Route path="executive-command" element={<ExecutiveCommand />} />
+                <Route path="incident-command"  element={<IncidentCommand />} />
+                <Route path="incidents"         element={<IncidentCommand />} />
                 <Route path="dashboard"        element={<Dashboard />} />
                 <Route path="resident-portal" element={<ResidentPortal />} />
                 <Route path="cleaner-ops"      element={<CleanerFieldOps />} />

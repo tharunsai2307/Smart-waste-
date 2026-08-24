@@ -230,7 +230,41 @@ typedef struct {
     char description[250];
     char createdAt[30];
     char resolvedAt[30];
+    char entityType[30];
+    int entityId;
+    int hubId;
+    int vehicleId;
+    int routeId;
+    int facilityId;
+    char assignedRole[30];
+    char acknowledgedAt[30];
+    char closedAt[30];
+    int escalationLevel;
 } Incident;
+
+typedef struct {
+    int timelineId;
+    int incidentId;
+    char timestamp[32];
+    int actorId;
+    char actorRole[32];
+    char action[40];
+    char previousStatus[20];
+    char newStatus[20];
+    char comment[256];
+    char evidenceRef[64];
+} IncidentTimelineEntry;
+
+typedef struct {
+    int userId;
+    int criticalAlerts;
+    int highSeverityAlerts;
+    int assignedIncidentsOnly;
+    int hubAlerts;
+    int vehicleAlerts;
+    int collectionExceptions;
+    int recyclingExceptions;
+} NotificationPreference;
 
 typedef struct {
     int recyclingId;

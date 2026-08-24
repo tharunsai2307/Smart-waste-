@@ -12,6 +12,7 @@
 #include "gis_route.h"
 #include "geospatial.h"
 #include "route_engine.h"
+#include "alert_engine.h"
 #include <stdio.h>
 
 int main(void) {
@@ -30,6 +31,7 @@ int main(void) {
     initLocationsData();
     initGisRoutesData();
     initRouteEngineData();
+    initAlertEngine();
 
     startServer("8080");
     return 0;

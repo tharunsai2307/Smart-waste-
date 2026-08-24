@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import {
   LayoutDashboard, Trash2, Truck, Route, RecycleIcon,
   Bell, BarChart3, FileText, Users, LogOut, Box, Zap, Globe, Warehouse, Map,
-  Home, ClipboardCheck, TrendingUp
+  Home, ClipboardCheck, TrendingUp, ShieldAlert
 } from 'lucide-react';
 import { useAppStore } from '../../store';
 
@@ -16,6 +16,8 @@ const ALL_NAV_ITEMS = [
   // Driver items
   { path: '/driver-dashboard', label: 'Driver Portal', icon: ClipboardCheck, roles: ['DRIVER', 'ADMIN'] },
   // Core Management items
+  { path: '/executive-command', label: 'Command Center', icon: LayoutDashboard, roles: ['ADMIN'] },
+  { path: '/incident-command', label: 'Incident Command', icon: ShieldAlert, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'DRIVER', 'RECYCLING_MANAGER'] },
   { path: '/dashboard',   label: 'Dashboard',    icon: LayoutDashboard, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'DRIVER', 'RECYCLING_MANAGER'] },
   { path: '/hubs',        label: 'Local Hubs',   icon: Warehouse, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'CLEANER', 'RESIDENT'] },
   { path: '/collections', label: 'Operations',   icon: Zap, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
@@ -49,76 +51,62 @@ const Sidebar: React.FC = () => {
       initial={{ x: -260 }}
       animate={{ x: 0 }}
       transition={{ duration: 0.4, ease: 'easeOut' }}
-      className="flex flex-col w-[220px] min-h-screen flex-shrink-0"
-      style={{
-        background: 'rgba(10,15,26,0.95)',
-        borderRight: '1px solid rgba(255,255,255,0.05)',
-      }}
+      className="flex flex-col w-[220px] min-h-screen flex-shrink-0 bg-slate-950/95 border-r border-slate-800/80"
     >
       {/* Logo */}
-      <div className="px-5 py-6 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+      <div className="px-5 py-6 border-b border-slate-800/80">
         <div className="flex items-center gap-3">
-          <span className="text-2xl">♻</span>
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center text-slate-950 font-black text-base shadow-lg shadow-emerald-500/20">
+            ♻
+          </div>
           <div>
-            <div className="text-xs font-bold text-white tracking-wider">WASTE</div>
-            <div className="text-xs text-emerald-400 tracking-wider">INTELLIGENCE</div>
+            <div className="font-bold text-sm text-white tracking-wide leading-none">SmartCity</div>
+            <div className="text-[10px] text-emerald-400 font-mono tracking-widest leading-none mt-1">WASTE OS</div>
           </div>
         </div>
       </div>
 
-      {/* User badge */}
-      {user && (
-        <div className="px-4 py-3 mx-3 mt-3 rounded-lg" style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.12)' }}>
-          <div className="text-xs text-emerald-400 font-mono tracking-wider">{user.role}</div>
-          <div className="text-sm text-white font-medium mt-0.5">{user.name}</div>
-        </div>
-      )}
-
-      {/* Nav */}
-      <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all duration-200
-               ${isActive
-                 ? 'text-emerald-400 bg-emerald-500/10 border-l-2 border-emerald-500'
-                 : 'text-slate-400 hover:text-white hover:bg-white/5'
-               }`
-            }
-          >
-            <item.icon size={15} />
-            {item.label}
-          </NavLink>
-        ))}
+      {/* Navigation */}
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+                  isActive
+                    ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30 shadow-md shadow-blue-600/10'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+                }`
+              }
+            >
+              <Icon size={16} />
+              <span>{item.label}</span>
+            </NavLink>
+          );
+        })}
       </nav>
 
-      {/* 3D Toggle */}
-      <div className="px-3 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+      {/* Footer controls */}
+      <div className="p-3 border-t border-slate-800/80 space-y-2">
         <button
           onClick={toggle3DMode}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all cursor-pointer"
-          style={{
-            background: is3DMode ? 'rgba(52,211,153,0.1)' : 'rgba(255,255,255,0.04)',
-            border: `1px solid ${is3DMode ? 'rgba(52,211,153,0.2)' : 'rgba(255,255,255,0.07)'}`,
-            color: is3DMode ? '#34d399' : '#64748b',
-          }}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium bg-slate-900/60 text-slate-400 hover:text-slate-200 border border-slate-800"
         >
-          <span className="text-xs">{is3DMode ? '◉' : '○'}</span>
-          {is3DMode ? '3D MODE ACTIVE' : '2D MODE'}
+          <span>3D Visuals</span>
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${is3DMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>
+            {is3DMode ? 'ON' : 'OFF'}
+          </span>
         </button>
-      </div>
 
-      {/* Logout */}
-      <div className="px-3 pb-4">
         <button
           onClick={handleLogout}
-          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-xs text-slate-500
-                     hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium text-rose-400 hover:bg-rose-500/10 transition-colors"
         >
-          <LogOut size={14} />
-          Sign Out
+          <LogOut size={15} />
+          <span>Sign Out</span>
         </button>
       </div>
     </motion.aside>

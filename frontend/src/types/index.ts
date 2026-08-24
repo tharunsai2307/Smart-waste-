@@ -688,3 +688,64 @@ export interface LiveFeedEvent {
   severity: string;
   actorId: number;
 }
+
+
+// ─────────────────────────────────────────────────────────────
+// Phase 10 Types: Incidents, Alerts & Notifications
+// ─────────────────────────────────────────────────────────────
+
+export interface Incident {
+  incidentId: number;
+  type: string;
+  severity: 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string;
+  status: 'DETECTED' | 'OPEN' | 'ACKNOWLEDGED' | 'ASSIGNED' | 'INVESTIGATING' | 'ACTION_REQUIRED' | 'RESOLVED' | 'CLOSED' | 'REJECTED' | 'CANCELLED' | string;
+  description: string;
+  collectionId: number;
+  reportedBy: number;
+  assignedTo: number;
+  createdAt: string;
+  resolvedAt: string;
+  acknowledgedAt?: string;
+  closedAt?: string;
+  entityType?: string;
+  entityId?: number;
+  hubId?: number;
+  vehicleId?: number;
+  routeId?: number;
+  facilityId?: number;
+  assignedRole?: string;
+  escalationLevel?: number;
+}
+
+export interface IncidentTimelineEntry {
+  timelineId: number;
+  incidentId: number;
+  timestamp: string;
+  actorId: number;
+  actorRole: string;
+  action: string;
+  previousStatus: string;
+  newStatus: string;
+  comment: string;
+  evidenceRef: string;
+}
+
+export interface Alert {
+  alertId: number;
+  type: string;
+  referenceId: number;
+  message: string;
+  date: string;
+  resolved: number;
+}
+
+export interface NotificationPreference {
+  userId: number;
+  criticalAlerts: number;
+  highSeverityAlerts: number;
+  assignedIncidentsOnly: number;
+  hubAlerts: number;
+  vehicleAlerts: number;
+  collectionExceptions: number;
+  recyclingExceptions: number;
+}

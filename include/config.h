@@ -70,4 +70,9 @@
 #define OPERATIONAL_EVENTS_FILE "data/operational_events.dat"
 #define VEHICLE_LOADS_FILE "data/vehicle_loads.dat"
 
+
+// Phase 10: Incident Timeline & Notifications
+#define INCIDENT_TIMELINE_FILE "data/incident_timeline.dat"
+#define NOTIFICATION_PREFS_FILE "data/notification_preferences.dat"
+
 #endif
