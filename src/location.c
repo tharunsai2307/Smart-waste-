@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+extern char g_current_workspace[37];
 
 void initLocationsData() {
     FILE *fp = fopen(LOCATIONS_FILE, "ab+");
@@ -21,6 +22,8 @@ static int getNextLocationId() {
     GeoLocation loc;
     int maxId = 0;
     while (fread(&loc, sizeof(GeoLocation), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(loc.workspaceId, g_current_workspace) != 0) continue;
         if (loc.locationId > maxId) maxId = loc.locationId;
     }
     fclose(fp);
@@ -45,6 +48,8 @@ int updateGeoLocation(GeoLocation *loc) {
     GeoLocation temp;
     int found = 0;
     while (fread(&temp, sizeof(GeoLocation), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.locationId == loc->locationId) {
             getCurrentTimestamp(loc->updatedAt, sizeof(loc->updatedAt));
             fseek(fp, -(long)sizeof(GeoLocation), SEEK_CUR);
@@ -62,6 +67,8 @@ int getGeoLocation(int locationId, GeoLocation *loc) {
     if (!fp) return 0;
     GeoLocation temp;
     while (fread(&temp, sizeof(GeoLocation), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.locationId == locationId) {
             *loc = temp;
             fclose(fp);
@@ -77,6 +84,8 @@ int getGeoLocationByRef(LocationType type, int refId, GeoLocation *loc) {
     if (!fp) return 0;
     GeoLocation temp;
     while (fread(&temp, sizeof(GeoLocation), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.type == type && temp.referenceId == refId) {
             *loc = temp;
             fclose(fp);
@@ -105,6 +114,8 @@ static int getNextServiceAreaId() {
     ServiceArea area;
     int maxId = 0;
     while (fread(&area, sizeof(ServiceArea), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(area.workspaceId, g_current_workspace) != 0) continue;
         if (area.areaId > maxId) maxId = area.areaId;
     }
     fclose(fp);

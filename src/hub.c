@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+extern char g_current_workspace[37];
 
 void initHubData() {
     FILE *fp = fopen(HUBS_FILE, "rb");
@@ -33,6 +34,8 @@ int addHub(LocalHub *hub) {
     if (fp != NULL) {
         LocalHub temp;
         while (fread(&temp, sizeof(LocalHub), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.hubId > maxId) maxId = temp.hubId;
         }
         fclose(fp);
@@ -73,6 +76,8 @@ int updateHub(const LocalHub *hub) {
     getCurrentTimestamp(now, sizeof(now));
 
     while (fread(&temp, sizeof(LocalHub), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.hubId == hub->hubId) {
             temp = *hub;
             strncpy(temp.updatedAt, now, sizeof(temp.updatedAt) - 1);
@@ -103,6 +108,8 @@ int getHubById(int hubId, LocalHub *hub) {
     LocalHub temp;
     int found = 0;
     while (fread(&temp, sizeof(LocalHub), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.hubId == hubId) {
             *hub = temp;
             found = 1;
@@ -120,6 +127,8 @@ int getHubByManagerId(int managerId, LocalHub *hub) {
     LocalHub temp;
     int found = 0;
     while (fread(&temp, sizeof(LocalHub), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.managerId == managerId) {
             *hub = temp;
             found = 1;
@@ -149,7 +158,7 @@ float calculateHubCurrentLoad(int hubId) {
     float currentLoad = 0.0f;
     HubInventoryTransaction trans;
     while (fread(&trans, sizeof(HubInventoryTransaction), 1, fp) == 1) {
-        if (trans.hubId == hubId) {
+if (trans.hubId == hubId) {
             if (strcmp(trans.transactionType, "INBOUND_COLLECTION") == 0) {
                 currentLoad += trans.quantityKg;
             } else if (strcmp(trans.transactionType, "OUTBOUND_TRANSFER") == 0) {
@@ -229,7 +238,7 @@ int recordHubTransaction(HubInventoryTransaction *trans, int emergencyOverride, 
     if (fp != NULL) {
         HubInventoryTransaction temp;
         while (fread(&temp, sizeof(HubInventoryTransaction), 1, fp) == 1) {
-            if (temp.transactionId > maxId) maxId = temp.transactionId;
+if (temp.transactionId > maxId) maxId = temp.transactionId;
         }
         fclose(fp);
     }
@@ -295,7 +304,7 @@ void getHubPerformance(int hubId, float *todayInbound, float *todayOutbound, int
     if (fp != NULL) {
         HubInventoryTransaction trans;
         while (fread(&trans, sizeof(HubInventoryTransaction), 1, fp) == 1) {
-            if (trans.hubId == hubId && strncmp(trans.timestamp, todayPrefix, strlen(todayPrefix)) == 0) {
+if (trans.hubId == hubId && strncmp(trans.timestamp, todayPrefix, strlen(todayPrefix)) == 0) {
                 if (strcmp(trans.transactionType, "INBOUND_COLLECTION") == 0) {
                     *todayInbound += trans.quantityKg;
                 } else if (strcmp(trans.transactionType, "OUTBOUND_TRANSFER") == 0) {
@@ -311,6 +320,8 @@ void getHubPerformance(int hubId, float *todayInbound, float *todayOutbound, int
     if (fp != NULL) {
         User u;
         while (fread(&u, sizeof(User), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(u.workspaceId, g_current_workspace) != 0) continue;
             if (u.role == ROLE_CLEANER && u.assignedHub == hubId && u.status == 1) {
                 (*activeCleaners)++;
             }

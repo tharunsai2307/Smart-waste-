@@ -14,6 +14,7 @@ void initUsersData() {
 }
 
 #include <stdint.h>
+extern char g_current_workspace[37];
 
 #define ROTRIGHT(a,b) (((a) >> (b)) | ((a) << (32-(b))))
 #define CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))
@@ -194,6 +195,8 @@ int updateUser(const User *updatedUser) {
     User temp;
     int found = 0;
     while (fread(&temp, sizeof(User), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.userId == updatedUser->userId) {
             fwrite(updatedUser, sizeof(User), 1, tempFp);
             found = 1;
@@ -229,6 +232,8 @@ int deleteUser(int userId) {
     User temp;
     int found = 0;
     while (fread(&temp, sizeof(User), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.userId == userId) {
             found = 1;
         } else {
@@ -258,6 +263,8 @@ void displayAllUsers() {
     printf("%-5s %-15s %-20s %-20s %-10s\n", "ID", "Username", "Name", "Role (ID)", "Status");
     printf("%s", SUB_LINE);
     while (fread(&temp, sizeof(User), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         printf("%-5d %-15s %-20s %-20d %-10s\n",
             temp.userId, temp.username, temp.name, temp.role,
             (temp.status == 1 ? "Active" : "Locked"));

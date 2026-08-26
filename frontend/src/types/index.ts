@@ -80,18 +80,7 @@ export interface CollectionRequest {
   completedAt?: string;
 }
 
-export interface Incident {
-  incidentId: number;
-  type: 'MISSED_COLLECTION' | 'ADDRESS_INACCESSIBLE' | 'WEIGHT_VARIANCE' | 'HUB_CAPACITY_ISSUE' | 'RESIDENT_UNAVAILABLE' | 'SAFETY_ISSUE';
-  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  collectionId: number;
-  reportedBy: number;
-  assignedTo: number;
-  status: 'OPEN' | 'INVESTIGATING' | 'RESOLVED' | 'CLOSED';
-  description: string;
-  createdAt: string;
-  resolvedAt?: string;
-}
+
 
 export interface Resident {
   residentId: number;
@@ -175,6 +164,14 @@ export interface AuthUser {
   requiresPasswordChange?: boolean;
   profileComplete?: boolean;
   assignedHub?: number;
+  workspaceId?: string;
+}
+
+export interface Workspace {
+  workspaceId: string;
+  name: string;
+  description: string;
+  createdAt?: string;
 }
 
 export interface LocalHub {
@@ -704,7 +701,7 @@ export interface Incident {
   reportedBy: number;
   assignedTo: number;
   createdAt: string;
-  resolvedAt: string;
+  resolvedAt?: string;
   acknowledgedAt?: string;
   closedAt?: string;
   entityType?: string;
@@ -730,14 +727,6 @@ export interface IncidentTimelineEntry {
   evidenceRef: string;
 }
 
-export interface Alert {
-  alertId: number;
-  type: string;
-  referenceId: number;
-  message: string;
-  date: string;
-  resolved: number;
-}
 
 export interface NotificationPreference {
   userId: number;

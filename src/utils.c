@@ -84,6 +84,13 @@ void logAudit(int actorId, const char* action, int targetId) {
     struct tm *tm = localtime(&t);
     strftime(log.timestamp, sizeof(log.timestamp), "%Y-%m-%d %H:%M:%S", tm);
     
+    extern char g_current_workspace[37];
+    if (g_current_workspace[0] != '\0') {
+        strncpy(log.workspaceId, g_current_workspace, sizeof(log.workspaceId) - 1);
+    } else {
+        strcpy(log.workspaceId, "global");
+    }
+    
     fwrite(&log, sizeof(AuditLog), 1, fp);
     fclose(fp);
 }

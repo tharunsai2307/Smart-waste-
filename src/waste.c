@@ -1,5 +1,6 @@
 #include "waste.h"
 #include "utils.h"
+extern char g_current_workspace[37];
 
 void initWasteData() {
     FILE *fp = fopen(WASTE_FILE, "rb");
@@ -48,6 +49,8 @@ int updateWaste(const Waste *w) {
     Waste temp;
     int found = 0;
     while (fread(&temp, sizeof(Waste), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.wasteId == w->wasteId) {
             fwrite(w, sizeof(Waste), 1, tempFp);
             found = 1;
@@ -80,6 +83,8 @@ int deleteWaste(int wasteId) {
     Waste temp;
     int found = 0;
     while (fread(&temp, sizeof(Waste), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.wasteId == wasteId) {
             found = 1;
         } else {
@@ -104,6 +109,8 @@ void displayAllWaste() {
     printf("%s", SUB_LINE);
     Waste temp;
     while (fread(&temp, sizeof(Waste), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         printf("%-5d %-10d %-10d %-15s %-10.2f %-12s %-10s %-10s\n", 
                temp.wasteId, temp.residentId, temp.binId, temp.wasteType, temp.quantity,
                temp.date, temp.recyclable ? "Yes" : "No", temp.collected ? "Yes" : "No");
@@ -122,6 +129,8 @@ void displayWasteByResident(int residentId) {
     printf("%s", SUB_LINE);
     Waste temp;
     while (fread(&temp, sizeof(Waste), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if(temp.residentId == residentId) {
             printf("%-5d %-10d %-10d %-15s %-10.2f %-12s %-10s %-10s\n", 
                    temp.wasteId, temp.residentId, temp.binId, temp.wasteType, temp.quantity,

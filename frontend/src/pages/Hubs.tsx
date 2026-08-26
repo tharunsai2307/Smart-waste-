@@ -21,6 +21,7 @@ const HubsPage: React.FC = () => {
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [showInboundModal, setShowInboundModal] = useState(false);
   const [showOutboundModal, setShowOutboundModal] = useState(false);
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);

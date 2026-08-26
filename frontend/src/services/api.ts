@@ -1,12 +1,20 @@
 import { useAppStore } from '../store';
+import type { Incident, IncidentTimelineEntry, Alert, NotificationPreference } from '../types';
 
 const BASE_URL = '/api';
 
+let activeWorkspaceOverride: string | null = null;
+export const setActiveWorkspaceOverride = (id: string | null) => { activeWorkspaceOverride = id; };
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const userId = useAppStore.getState().user?.userId;
+  const workspaceId = activeWorkspaceOverride || useAppStore.getState().user?.workspaceId;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (userId) {
     headers['Authorization'] = userId.toString();
+  }
+  if (workspaceId) {
+    headers['X-Workspace-Id'] = workspaceId;
   }
   
   const res = await fetch(BASE_URL + url, {
@@ -20,6 +28,11 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 export const api = {
   // Health
   health: () => fetchJSON<{ status: string }>('/health'),
+
+  // Workspaces
+  getCurrentWorkspace: () => fetchJSON<import('../types').Workspace>('/workspaces/current'),
+  getWorkspaces: () => fetchJSON<import('../types').Workspace[]>('/workspaces'),
+  createWorkspace: (data: any) => fetchJSON<{ success: boolean; workspaceId?: string }>('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
 
   // Auth
   login: (username: string, password: string) =>
@@ -190,9 +203,7 @@ export const api = {
     preferredTime: string;
     cleanerId?: number;
   }) => fetchJSON<{ success: boolean; message?: string }>('/collections/reschedule', { method: 'POST', body: JSON.stringify(data) }),
-  getIncidents: () => fetchJSON<import('../types').Incident[]>('/incidents'),
-  resolveIncident: (incidentId: number, resolutionNote: string) =>
-    fetchJSON<{ success: boolean; message?: string }>('/incidents/resolve', { method: 'POST', body: JSON.stringify({ incidentId, resolutionNote }) }),
+
   processCollection: () => fetchJSON<{ success: boolean; message: string }>('/collections/process', { method: 'POST' }),
 
   // Residents
@@ -319,84 +330,93 @@ export const api = {
         .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
       if (parts.length > 0) q = `?${parts.join('&')}`;
     }
-    return request<Incident[]>(`/incidents${q}`);
+    return fetchJSON<Incident[]>(`/incidents${q}`);
   },
 
   getIncidentById: (id: number): Promise<Incident> =>
-    request<Incident>(`/incidents/${id}`),
+    fetchJSON<Incident>(`/incidents/${id}`),
 
   createIncident: (data: Partial<Incident>): Promise<{ success: boolean; incidentId: number }> =>
-    request<{ success: boolean; incidentId: number }>('/incidents', {
+    fetchJSON<{ success: boolean; incidentId: number }>('/incidents', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   acknowledgeIncident: (id: number, data: { actorId?: number; actorRole?: string; note?: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/acknowledge`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/acknowledge`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   assignIncident: (id: number, data: { actorId?: number; actorRole?: string; assignToUserId: number; targetRole?: string; note?: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/assign`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/assign`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   investigateIncident: (id: number, data: { actorId?: number; actorRole?: string; note?: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/investigate`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/investigate`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   actionIncident: (id: number, data: { actorId?: number; actorRole?: string; actionTaken: string; note?: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/action`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/action`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   resolveIncident: (id: number, data: { actorId?: number; actorRole?: string; note?: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/resolve`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/resolve`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   closeIncident: (id: number, data: { actorId?: number; actorRole?: string; note?: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/close`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/close`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   reopenIncident: (id: number, data: { actorId?: number; actorRole?: string; note?: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/reopen`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/reopen`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   getIncidentTimeline: (id: number): Promise<IncidentTimelineEntry[]> =>
-    request<IncidentTimelineEntry[]>(`/incidents/${id}/timeline`),
+    fetchJSON<IncidentTimelineEntry[]>(`/incidents/${id}/timeline`),
 
   addIncidentComment: (id: number, data: { actorId?: number; actorRole?: string; comment: string }): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/incidents/${id}/comments`, {
+    fetchJSON<{ success: boolean }>(`/incidents/${id}/comments`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   getUnreadAlerts: (): Promise<Alert[]> =>
-    request<Alert[]>('/alerts/unread'),
+    fetchJSON<Alert[]>('/alerts/unread'),
 
   acknowledgeAlert: (id: number): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>(`/alerts/${id}/acknowledge`, {
+    fetchJSON<{ success: boolean }>(`/alerts/${id}/acknowledge`, {
       method: 'POST',
     }),
 
   getNotificationPreferences: (userId?: number): Promise<NotificationPreference> =>
-    request<NotificationPreference>(`/notifications/preferences${userId ? `?userId=${userId}` : ''}`),
+    fetchJSON<NotificationPreference>(`/notifications/preferences${userId ? `?userId=${userId}` : ''}`),
 
   saveNotificationPreferences: (prefs: NotificationPreference): Promise<{ success: boolean }> =>
-    request<{ success: boolean }>('/notifications/preferences', {
+    fetchJSON<{ success: boolean }>('/notifications/preferences', {
       method: 'POST',
       body: JSON.stringify(prefs),
     }),
+
+  // Phase 11: Workspace APIs
+  getWorkspaces: () => fetchJSON<import('../types').Workspace[]>('/workspaces'),
+  createWorkspace: (data: { name: string; description?: string }) =>
+    fetchJSON<{ success: boolean; workspaceId: string }>('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getCurrentWorkspace: () => fetchJSON<import('../types').Workspace>('/workspaces/current'),
 
 };

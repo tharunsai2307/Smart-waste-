@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import {
   LayoutDashboard, Trash2, Truck, Route, RecycleIcon,
   Bell, BarChart3, FileText, Users, LogOut, Box, Zap, Globe, Warehouse, Map,
-  Home, ClipboardCheck, TrendingUp, ShieldAlert
+  Home, ClipboardCheck, TrendingUp, ShieldAlert, Building2
 } from 'lucide-react';
 import { useAppStore } from '../../store';
 
@@ -17,6 +17,7 @@ const ALL_NAV_ITEMS = [
   { path: '/driver-dashboard', label: 'Driver Portal', icon: ClipboardCheck, roles: ['DRIVER', 'ADMIN'] },
   // Core Management items
   { path: '/executive-command', label: 'Command Center', icon: LayoutDashboard, roles: ['ADMIN'] },
+  { path: '/workspaces', label: 'Workspaces', icon: Building2, roles: ['ADMIN', 'MUNICIPAL_ADMIN'] },
   { path: '/incident-command', label: 'Incident Command', icon: ShieldAlert, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'DRIVER', 'RECYCLING_MANAGER'] },
   { path: '/dashboard',   label: 'Dashboard',    icon: LayoutDashboard, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'DRIVER', 'RECYCLING_MANAGER'] },
   { path: '/hubs',        label: 'Local Hubs',   icon: Warehouse, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'CLEANER', 'RESIDENT'] },

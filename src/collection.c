@@ -10,6 +10,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+extern char g_current_workspace[37];
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -143,6 +144,8 @@ int addCollectionRequest(CollectionRequest *req) {
     if (fp != NULL) {
         CollectionRequest temp;
         while (fread(&temp, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.collectionId > maxId) maxId = temp.collectionId;
         }
         fclose(fp);
@@ -177,6 +180,8 @@ int getCollectionRequestById(int reqId, CollectionRequest *req) {
     CollectionRequest temp;
     int found = 0;
     while (fread(&temp, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.collectionId == reqId) {
             *req = temp;
             found = 1;
@@ -203,6 +208,8 @@ int updateCollectionRequest(const CollectionRequest *req) {
     getCurrentTimestamp(now, sizeof(now));
 
     while (fread(&temp, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.collectionId == req->collectionId) {
             temp = *req;
             strncpy(temp.updatedAt, now, sizeof(temp.updatedAt) - 1);
@@ -324,6 +331,8 @@ int canAssignCleanerToCollection(int cleanerId, int hubId, float *currentWorkloa
     if (fp != NULL) {
         CollectionRequest req;
         while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
             if (req.cleanerId == cleanerId &&
                (req.status == COLLECTION_ASSIGNED || req.status == COLLECTION_EN_ROUTE ||
                 req.status == COLLECTION_ARRIVED || req.status == COLLECTION_COLLECTING ||

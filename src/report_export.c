@@ -1,6 +1,7 @@
 #include "report_export.h"
 #include <stdio.h>
 #include <string.h>
+extern char g_current_workspace[37];
 
 static void sanitizeCSV(char *dest, size_t dsz, const char *src) {
     size_t i = 0, di = 0;
@@ -28,6 +29,8 @@ int exportCollectionReportCSV(const AnalyticsFilter* filter, char* outBuffer, in
 
     CollectionRequest req;
     while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
         if (filter && filter->hubId > 0 && req.hubId != filter->hubId) continue;
         if (filter && filter->cleanerId > 0 && req.cleanerId != filter->cleanerId) continue;
         if (filter && filter->residentId > 0 && req.residentId != filter->residentId) continue;
@@ -140,6 +143,8 @@ int exportRecyclingReportCSV(const AnalyticsFilter* filter, char* outBuffer, int
 
     RecyclingBatch b;
     while (fread(&b, sizeof(RecyclingBatch), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(b.workspaceId, g_current_workspace) != 0) continue;
         if (filter && filter->facilityId > 0 && b.facilityId != filter->facilityId) continue;
         if (!isDateInFilter(b.createdAt, filter)) continue;
 
@@ -170,6 +175,8 @@ int exportIncidentReportCSV(const AnalyticsFilter* filter, char* outBuffer, int 
 
     Incident inc;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (!isDateInFilter(inc.createdAt, filter)) continue;
 
         char type[64], sev[32], st[32], desc[256], cat[32], res[32];

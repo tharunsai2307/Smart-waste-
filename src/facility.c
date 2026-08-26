@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+extern char g_current_workspace[37];
 
 void initFacilityData() {
     FILE *fp = fopen(FACILITIES_FILE, "rb");
@@ -20,6 +21,8 @@ int addFacility(TransportFacility *f) {
     if (fp) {
         TransportFacility temp;
         while (fread(&temp, sizeof(TransportFacility), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.facilityId > maxId) maxId = temp.facilityId;
         }
         fclose(fp);
@@ -67,6 +70,8 @@ int updateFacility(const TransportFacility *f) {
     TransportFacility temp;
     int found = 0;
     while (fread(&temp, sizeof(TransportFacility), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.facilityId == f->facilityId) {
             fwrite(f, sizeof(TransportFacility), 1, tempFp);
             found = 1;

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+extern char g_current_workspace[37];
 
 // ─────────────────────────────────────────────────────────
 // DATE FILTERING UTILITIES
@@ -166,6 +167,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         Resident res;
         while (fread(&res, sizeof(Resident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(res.workspaceId, g_current_workspace) != 0) continue;
             out->totalResidents++;
             if (strcmp(res.locationStatus, "INVALID") != 0) {
                 out->activeResidents++;
@@ -179,6 +182,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         CollectionRequest req;
         while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
             if (filter && filter->hubId > 0 && req.hubId != filter->hubId) continue;
             if (filter && filter->cleanerId > 0 && req.cleanerId != filter->cleanerId) continue;
             if (filter && filter->residentId > 0 && req.residentId != filter->residentId) continue;
@@ -204,6 +209,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         LocalHub hub;
         while (fread(&hub, sizeof(LocalHub), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(hub.workspaceId, g_current_workspace) != 0) continue;
             if (filter && filter->hubId > 0 && hub.hubId != filter->hubId) continue;
             out->totalHubs++;
             if (hub.status == HUB_NORMAL || hub.status == HUB_WARNING) {
@@ -220,6 +227,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         Vehicle veh;
         while (fread(&veh, sizeof(Vehicle), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(veh.workspaceId, g_current_workspace) != 0) continue;
             if (filter && filter->vehicleId > 0 && veh.vehicleId != filter->vehicleId) continue;
             out->totalVehicles++;
             if (veh.status == VEHICLE_AVAILABLE || veh.status == VEHICLE_ASSIGNED || veh.status == VEHICLE_ON_ROUTE) {
@@ -234,6 +243,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         Route rt;
         while (fread(&rt, sizeof(Route), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(rt.workspaceId, g_current_workspace) != 0) continue;
             if (filter && filter->driverId > 0 && rt.driverId != filter->driverId) continue;
             if (filter && filter->vehicleId > 0 && rt.vehicleId != filter->vehicleId) continue;
             if (filter && filter->hubId > 0 && rt.originId != filter->hubId && rt.destinationId != filter->hubId) continue;
@@ -254,6 +265,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         WasteTransfer trf;
         while (fread(&trf, sizeof(WasteTransfer), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(trf.workspaceId, g_current_workspace) != 0) continue;
             if (filter && filter->hubId > 0 && trf.sourceHubId != filter->hubId) continue;
             if (filter && filter->facilityId > 0 && trf.destinationFacilityId != filter->facilityId) continue;
             if (!isDateInFilter(trf.createdAt, filter)) continue;
@@ -270,6 +283,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         RecyclingBatch batch;
         while (fread(&batch, sizeof(RecyclingBatch), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(batch.workspaceId, g_current_workspace) != 0) continue;
             if (filter && filter->facilityId > 0 && batch.facilityId != filter->facilityId) continue;
             if (!isDateInFilter(batch.createdAt, filter)) continue;
 
@@ -288,6 +303,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         Incident inc;
         while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
             if (!isDateInFilter(inc.createdAt, filter)) continue;
             out->totalIncidents++;
             if (strcmp(inc.status, "OPEN") == 0 || strcmp(inc.status, "UNDER_REVIEW") == 0) {
@@ -302,6 +319,8 @@ void calculateAnalyticsSummary(const AnalyticsFilter* filter, AnalyticsSummary* 
     if (fp) {
         QREvent qe;
         while (fread(&qe, sizeof(QREvent), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(qe.workspaceId, g_current_workspace) != 0) continue;
             if (!isDateInFilter(qe.scanTimestamp, filter)) continue;
             out->totalQrScans++;
             if (qe.result == QR_SUCCESS) {
@@ -333,6 +352,8 @@ void calculateCollectionAnalytics(const AnalyticsFilter* filter, CollectionAnaly
 
     CollectionRequest req;
     while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
         if (filter && filter->hubId > 0 && req.hubId != filter->hubId) continue;
         if (filter && filter->cleanerId > 0 && req.cleanerId != filter->cleanerId) continue;
         if (filter && filter->residentId > 0 && req.residentId != filter->residentId) continue;
@@ -429,7 +450,7 @@ int getHubAnalyticsList(const AnalyticsFilter* filter, HubAnalyticsItem* outList
         if (tfp) {
             HubInventoryTransaction tx;
             while (fread(&tx, sizeof(HubInventoryTransaction), 1, tfp) == 1) {
-                if (tx.hubId != hub.hubId) continue;
+if (tx.hubId != hub.hubId) continue;
                 if (strcmp(tx.transactionType, "INBOUND_COLLECTION") == 0 ||
                     strcmp(tx.transactionType, "INBOUND") == 0 ||
                     strcmp(tx.transactionType, "ADJUSTMENT_IN") == 0) {
@@ -462,6 +483,8 @@ int getHubAnalyticsList(const AnalyticsFilter* filter, HubAnalyticsItem* outList
         if (cfp) {
             CollectionRequest req;
             while (fread(&req, sizeof(CollectionRequest), 1, cfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
                 if (req.hubId == hub.hubId && (req.status == COLLECTION_REQUESTED || req.status == COLLECTION_ASSIGNED)) {
                     outList[count].pendingCollections++;
                 }
@@ -473,6 +496,8 @@ int getHubAnalyticsList(const AnalyticsFilter* filter, HubAnalyticsItem* outList
         if (trfp) {
             WasteTransfer trf;
             while (fread(&trf, sizeof(WasteTransfer), 1, trfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(trf.workspaceId, g_current_workspace) != 0) continue;
                 if (trf.sourceHubId == hub.hubId && (trf.status == TRANSFER_REQUESTED || trf.status == TRANSFER_APPROVED || trf.status == TRANSFER_DRIVER_ASSIGNED)) {
                     outList[count].pendingTransfers++;
                 }
@@ -499,6 +524,8 @@ void calculateFleetAnalytics(const AnalyticsFilter* filter, FleetAnalytics* out)
 
     Vehicle veh;
     while (fread(&veh, sizeof(Vehicle), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(veh.workspaceId, g_current_workspace) != 0) continue;
         if (filter && filter->vehicleId > 0 && veh.vehicleId != filter->vehicleId) continue;
         if (filter && filter->hubId > 0 && veh.assignedHubId != filter->hubId) continue;
 
@@ -543,6 +570,8 @@ void calculateFleetAnalytics(const AnalyticsFilter* filter, FleetAnalytics* out)
     if (ifp) {
         VehicleInspection ins;
         while (fread(&ins, sizeof(VehicleInspection), 1, ifp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(ins.workspaceId, g_current_workspace) != 0) continue;
             if (!isDateInFilter(ins.timestamp, filter)) continue;
             if (ins.inspectionStatus == INSPECT_PASS) {
                 out->inspectionPasses++;
@@ -582,6 +611,8 @@ int getVehicleAnalyticsList(const AnalyticsFilter* filter, VehicleAnalyticsItem*
         if (ifp) {
             VehicleInspection ins;
             while (fread(&ins, sizeof(VehicleInspection), 1, ifp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(ins.workspaceId, g_current_workspace) != 0) continue;
                 if (ins.vehicleId == veh.vehicleId) {
                     strncpy(outList[count].lastInspectionDate, ins.timestamp, sizeof(outList[count].lastInspectionDate) - 1);
                     outList[count].lastInspectionStatus = ins.inspectionStatus;
@@ -614,6 +645,8 @@ void calculateRouteAnalytics(const AnalyticsFilter* filter, RouteAnalytics* out)
     int completedCount = 0;
 
     while (fread(&rt, sizeof(Route), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(rt.workspaceId, g_current_workspace) != 0) continue;
         if (filter && filter->driverId > 0 && rt.driverId != filter->driverId) continue;
         if (filter && filter->vehicleId > 0 && rt.vehicleId != filter->vehicleId) continue;
         if (filter && filter->hubId > 0 && rt.originId != filter->hubId && rt.destinationId != filter->hubId) continue;
@@ -661,7 +694,7 @@ void calculateRouteAnalytics(const AnalyticsFilter* filter, RouteAnalytics* out)
     if (sfp) {
         RouteEngineStop st;
         while (fread(&st, sizeof(RouteEngineStop), 1, sfp) == 1) {
-            out->totalStops++;
+out->totalStops++;
             if (st.status == STOP_COMPLETED) {
                 out->completedStops++;
             } else {
@@ -707,7 +740,7 @@ int getRouteAnalyticsList(const AnalyticsFilter* filter, RouteAnalyticsItem* out
         if (sfp) {
             RouteEngineStop st;
             while (fread(&st, sizeof(RouteEngineStop), 1, sfp) == 1) {
-                if (st.routeId == rt.routeId) {
+if (st.routeId == rt.routeId) {
                     outList[count].stopCount++;
                     if (st.status == STOP_COMPLETED) {
                         outList[count].completedStopCount++;
@@ -736,6 +769,8 @@ void calculateRecyclingAnalytics(const AnalyticsFilter* filter, RecyclingAnalyti
 
     RecyclingBatch batch;
     while (fread(&batch, sizeof(RecyclingBatch), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(batch.workspaceId, g_current_workspace) != 0) continue;
         if (filter && filter->facilityId > 0 && batch.facilityId != filter->facilityId) continue;
         if (!isDateInFilter(batch.createdAt, filter)) continue;
 
@@ -758,7 +793,7 @@ void calculateRecyclingAnalytics(const AnalyticsFilter* filter, RecyclingAnalyti
     if (cfp) {
         WasteClassification wc;
         while (fread(&wc, sizeof(WasteClassification), 1, cfp) == 1) {
-            if (isDateInFilter(wc.timestamp, filter)) {
+if (isDateInFilter(wc.timestamp, filter)) {
                 out->totalClassifiedKg += wc.weightKg;
             }
         }
@@ -769,7 +804,7 @@ void calculateRecyclingAnalytics(const AnalyticsFilter* filter, RecyclingAnalyti
     if (sfp) {
         SegregationRecord sr;
         while (fread(&sr, sizeof(SegregationRecord), 1, sfp) == 1) {
-            if (isDateInFilter(sr.timestamp, filter)) {
+if (isDateInFilter(sr.timestamp, filter)) {
                 out->totalSegregatedKg += sr.outputWeightKg;
             }
         }
@@ -810,6 +845,8 @@ int getWasteTypeAnalytics(const AnalyticsFilter* filter, WasteTypeAnalyticsItem*
     if (fp) {
         CollectionRequest req;
         while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
             if (!isDateInFilter(req.createdAt, filter)) continue;
             float w = (req.actualWeightKg > 0.0f ? req.actualWeightKg : req.estimatedWeightKg);
 
@@ -830,7 +867,7 @@ int getWasteTypeAnalytics(const AnalyticsFilter* filter, WasteTypeAnalyticsItem*
     if (rfp) {
         RecoveryRecord rec;
         while (fread(&rec, sizeof(RecoveryRecord), 1, rfp) == 1) {
-            if (!isDateInFilter(rec.processedAt, filter)) continue;
+if (!isDateInFilter(rec.processedAt, filter)) continue;
             for (int i = 0; i < numTypes; i++) {
                 if (strstr(rec.materialType, standardTypes[i]) != NULL) {
                     outList[i].recoveredKg += rec.weightKg;
@@ -847,7 +884,7 @@ int getWasteTypeAnalytics(const AnalyticsFilter* filter, WasteTypeAnalyticsItem*
     if (rsfp) {
         ResidualRecord res;
         while (fread(&res, sizeof(ResidualRecord), 1, rsfp) == 1) {
-            if (!isDateInFilter(res.timestamp, filter)) continue;
+if (!isDateInFilter(res.timestamp, filter)) continue;
             for (int i = 0; i < numTypes; i++) {
                 if (strstr(res.category, standardTypes[i]) != NULL) {
                     outList[i].residualKg += res.weightKg;
@@ -898,6 +935,8 @@ int getDriverPerformanceList(const AnalyticsFilter* filter, DriverPerformanceIte
         if (rfp) {
             Route rt;
             while (fread(&rt, sizeof(Route), 1, rfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(rt.workspaceId, g_current_workspace) != 0) continue;
                 if (rt.driverId == u.userId) {
                     outList[count].assignedRoutes++;
                     if (rt.status == ROUTE_ACCEPTED || rt.status == ROUTE_READY || rt.status == ROUTE_EN_ROUTE || rt.status == ROUTE_COMPLETED) {
@@ -919,7 +958,7 @@ int getDriverPerformanceList(const AnalyticsFilter* filter, DriverPerformanceIte
         if (sfp) {
             RouteEngineStop st;
             while (fread(&st, sizeof(RouteEngineStop), 1, sfp) == 1) {
-                if (st.status == STOP_COMPLETED) {
+if (st.status == STOP_COMPLETED) {
                     outList[count].completedStops++;
                 } else if (st.status == STOP_FAILED || st.status == STOP_SKIPPED) {
                     outList[count].missedStops++;
@@ -933,6 +972,8 @@ int getDriverPerformanceList(const AnalyticsFilter* filter, DriverPerformanceIte
         if (qfp) {
             QREvent qe;
             while (fread(&qe, sizeof(QREvent), 1, qfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(qe.workspaceId, g_current_workspace) != 0) continue;
                 if (qe.scannedBy == u.userId && qe.result == QR_FAILED) {
                     outList[count].qrScanFailures++;
                 }
@@ -945,6 +986,8 @@ int getDriverPerformanceList(const AnalyticsFilter* filter, DriverPerformanceIte
         if (ifp) {
             VehicleInspection ins;
             while (fread(&ins, sizeof(VehicleInspection), 1, ifp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(ins.workspaceId, g_current_workspace) != 0) continue;
                 if (ins.driverId == u.userId && ins.inspectionStatus == INSPECT_FAIL) {
                     outList[count].inspectionFailures++;
                 }
@@ -994,6 +1037,8 @@ int getCleanerPerformanceList(const AnalyticsFilter* filter, CleanerPerformanceI
         if (cfp) {
             CollectionRequest req;
             while (fread(&req, sizeof(CollectionRequest), 1, cfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
                 if (req.cleanerId == u.userId) {
                     outList[count].assignedCollections++;
                     if (req.status == COLLECTION_COMPLETED || req.status == COLLECTION_DEPOSITED_AT_HUB) {
@@ -1057,6 +1102,8 @@ int getFacilityAnalyticsList(const AnalyticsFilter* filter, FacilityAnalyticsIte
         if (bfp) {
             RecyclingBatch batch;
             while (fread(&batch, sizeof(RecyclingBatch), 1, bfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(batch.workspaceId, g_current_workspace) != 0) continue;
                 if (batch.facilityId == fac.facilityId) {
                     outList[count].receivedKg += batch.inputWeightKg;
                     outList[count].recoveredKg += batch.recoveredWeightKg;
@@ -1077,6 +1124,8 @@ int getFacilityAnalyticsList(const AnalyticsFilter* filter, FacilityAnalyticsIte
         if (tfp) {
             WasteTransfer trf;
             while (fread(&trf, sizeof(WasteTransfer), 1, tfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(trf.workspaceId, g_current_workspace) != 0) continue;
                 if (trf.destinationFacilityId == fac.facilityId) {
                     if (trf.status == TRANSFER_ACCEPTED || trf.status == TRANSFER_COMPLETED) {
                         outList[count].acceptedLoads++;
@@ -1113,6 +1162,8 @@ void calculateIncidentAnalytics(const AnalyticsFilter* filter, IncidentAnalytics
 
     Incident inc;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (!isDateInFilter(inc.createdAt, filter)) continue;
 
         out->totalIncidents++;
@@ -1155,6 +1206,8 @@ void calculateQRAnalytics(const AnalyticsFilter* filter, QRAnalytics* out) {
 
     QREvent qe;
     while (fread(&qe, sizeof(QREvent), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(qe.workspaceId, g_current_workspace) != 0) continue;
         if (!isDateInFilter(qe.scanTimestamp, filter)) continue;
 
         out->totalScans++;
@@ -1198,6 +1251,8 @@ int getOperationalTrends(const AnalyticsFilter* filter, OperationalTrendItem* ou
     if (fp) {
         CollectionRequest req;
         while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
             char d[16];
             strncpy(d, req.createdAt, 10);
             d[10] = '\0';
@@ -1223,6 +1278,8 @@ int getOperationalTrends(const AnalyticsFilter* filter, OperationalTrendItem* ou
     if (ifp) {
         Incident inc;
         while (fread(&inc, sizeof(Incident), 1, ifp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
             char d[16];
             strncpy(d, inc.createdAt, 10);
             d[10] = '\0';

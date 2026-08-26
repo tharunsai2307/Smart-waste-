@@ -9,6 +9,7 @@
 
 typedef enum {
     ROLE_ADMIN,
+    ROLE_MUNICIPAL_ADMIN,
     ROLE_LOCAL_HUB_MANAGER,
     ROLE_CLEANER,
     ROLE_DRIVER,
@@ -126,6 +127,7 @@ typedef struct {
     int status; // 1=Active, 0=Locked
     int failedAttempts;
     int requiresPasswordChange;
+    char workspaceId[37];
 } User;
 
 typedef struct {
@@ -146,6 +148,7 @@ typedef struct {
     char locationStatus[30]; // VERIFIED, UNVERIFIED, INVALID
     char serviceZone[50];
     int ecoPoints;
+    char workspaceId[37];
 } Resident;
 
 typedef struct {
@@ -158,6 +161,7 @@ typedef struct {
     int recyclable;
     int collected;
     char dataSource[10];
+    char workspaceId[37];
 } Waste;
 
 typedef struct {
@@ -168,6 +172,7 @@ typedef struct {
     char wasteType[30];
     BinStatus status;
     char dataSource[10];
+    char workspaceId[37];
 } Bin;
 
 // Phase 4: Extended Vehicle struct
@@ -190,6 +195,7 @@ typedef struct {
     VehicleStatus status;
     char createdAt[30];
     char updatedAt[30];
+    char workspaceId[37];
 } Vehicle;
 
 typedef struct {
@@ -217,6 +223,7 @@ typedef struct {
     char createdAt[30];
     char updatedAt[30];
     char completedAt[30];
+    char workspaceId[37];
 } CollectionRequest;
 
 typedef struct {
@@ -240,6 +247,7 @@ typedef struct {
     char acknowledgedAt[30];
     char closedAt[30];
     int escalationLevel;
+    char workspaceId[37];
 } Incident;
 
 typedef struct {
@@ -283,6 +291,7 @@ typedef struct {
     char message[200];
     char date[20];
     int resolved;
+    char workspaceId[37];
 } Alert;
 
 typedef struct {
@@ -305,6 +314,7 @@ typedef struct {
     HubStatus status;
     char createdAt[30];
     char updatedAt[30];
+    char workspaceId[37];
 } LocalHub;
 
 typedef struct {
@@ -328,6 +338,7 @@ typedef struct {
     char action[50];
     int targetId;
     char timestamp[30];
+    char workspaceId[37];
 } AuditLog;
 
 // Phase 4: Waste Transfer
@@ -358,6 +369,7 @@ typedef struct {
     int createdBy;
     char createdAt[30];
     char updatedAt[30];
+    char workspaceId[37];
 } WasteTransfer;
 
 // Phase 4: Registered Transport Facility (Destination)
@@ -377,6 +389,7 @@ typedef struct {
     char status[20];           // ACTIVE, INACTIVE, SUSPENDED
     char createdAt[30];
     char updatedAt[30];
+    char workspaceId[37];
 } TransportFacility;
 
 // Phase 5: Recycling Batch
@@ -394,6 +407,7 @@ typedef struct {
     char createdAt[30];
     char processedAt[30];
     char completedAt[30];
+    char workspaceId[37];
 } RecyclingBatch;
 
 // Phase 5: Waste Classification
@@ -479,6 +493,7 @@ typedef struct {
     float totalDistanceKm;
     float estimatedDurationMin;
     char createdAt[30];
+    char workspaceId[37];
 } RoutePlan;
 
 
@@ -511,6 +526,7 @@ typedef struct {
 
     char createdAt[32];
     char updatedAt[32];
+    char workspaceId[37];
 } GeoLocation;
 
 typedef struct {
@@ -522,6 +538,7 @@ typedef struct {
     int activeCleaners;
     float collectionCapacityKg;
     int active;
+    char workspaceId[37];
 } ServiceArea;
 
 typedef struct {
@@ -532,6 +549,7 @@ typedef struct {
     char timestamp[32];
     float accuracy;
     char source[30]; // MANUAL, GPS_API, MOBILE_DEVICE
+    char workspaceId[37];
 } VehicleLocation;
 
 typedef struct {
@@ -547,6 +565,7 @@ typedef struct {
     float estimatedDurationMin;
     char status[20]; // PENDING, IN_PROGRESS, COMPLETED, CANCELLED
     char createdAt[32];
+    char workspaceId[37];
 } RouteRequest;
 
 typedef struct {
@@ -589,6 +608,7 @@ typedef struct {
     RouteStatus status;
     char createdAt[32];
     char updatedAt[32];
+    char workspaceId[37];
 } Route;
 
 typedef struct {
@@ -643,6 +663,7 @@ typedef struct {
     char remarks[150];
     VehicleInspectionStatus inspectionStatus;
     char timestamp[32];
+    char workspaceId[37];
 } VehicleInspection;
 
 typedef struct {
@@ -656,6 +677,14 @@ typedef struct {
     int locationId;
     QREventResult result;
     char failureReason[150];
+    char workspaceId[37];
 } QREvent;
+
+typedef struct {
+    char workspaceId[37];
+    char name[100];
+    char description[255];
+    char createdAt[30];
+} Workspace;
 
 #endif

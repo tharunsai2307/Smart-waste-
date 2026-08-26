@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+extern char g_current_workspace[37];
 
 void initGisRoutesData() {
     FILE *fp = fopen(VEHICLE_LOCATIONS_FILE, "ab+");
@@ -34,6 +35,8 @@ int getLatestVehicleLocation(int vehicleId, VehicleLocation *loc) {
     VehicleLocation temp;
     int found = 0;
     while (fread(&temp, sizeof(VehicleLocation), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.vehicleId == vehicleId) {
             *loc = temp;
             found = 1;
@@ -49,6 +52,8 @@ static int getNextRouteId() {
     RouteRequest req;
     int maxId = 0;
     while (fread(&req, sizeof(RouteRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
         if (req.routeId > maxId) maxId = req.routeId;
     }
     fclose(fp);
@@ -73,6 +78,8 @@ int updateRouteRequest(RouteRequest *req) {
     RouteRequest temp;
     int found = 0;
     while (fread(&temp, sizeof(RouteRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.routeId == req->routeId) {
             fseek(fp, -(long)sizeof(RouteRequest), SEEK_CUR);
             fwrite(req, sizeof(RouteRequest), 1, fp);
@@ -89,6 +96,8 @@ int getRouteRequest(int routeId, RouteRequest *req) {
     if (!fp) return 0;
     RouteRequest temp;
     while (fread(&temp, sizeof(RouteRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.routeId == routeId) {
             *req = temp;
             fclose(fp);
@@ -118,7 +127,7 @@ static int getNextStopId() {
     RouteStop stop;
     int maxId = 0;
     while (fread(&stop, sizeof(RouteStop), 1, fp) == 1) {
-        if (stop.stopId > maxId) maxId = stop.stopId;
+if (stop.stopId > maxId) maxId = stop.stopId;
     }
     fclose(fp);
     return maxId + 1;

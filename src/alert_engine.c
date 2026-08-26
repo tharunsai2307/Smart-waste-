@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+extern char g_current_workspace[37];
 
 void initAlertEngine() {
     initAlertsData();
@@ -74,6 +75,8 @@ static int isAlertActive(const char* type, int referenceId) {
     Alert temp;
     int active = 0;
     while (fread(&temp, sizeof(Alert), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.resolved == 0 && temp.referenceId == referenceId && strcmp(temp.type, type) == 0) {
             active = 1;
             break;
@@ -89,6 +92,8 @@ static int isIncidentActive(const char* type, int entityId) {
     Incident temp;
     int active = 0;
     while (fread(&temp, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.entityId == entityId && strcmp(temp.type, type) == 0 &&
             strcmp(temp.status, "RESOLVED") != 0 && strcmp(temp.status, "CLOSED") != 0 &&
             strcmp(temp.status, "REJECTED") != 0 && strcmp(temp.status, "CANCELLED") != 0) {
@@ -113,6 +118,8 @@ int createOperationalIncident(const char* type, const char* severity,
     if (fp) {
         Incident temp;
         while (fread(&temp, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.incidentId > maxId) maxId = temp.incidentId;
         }
         fclose(fp);
@@ -164,6 +171,8 @@ int acknowledgeIncident(int incId, int actorId, const char* actorRole, const cha
     Incident inc;
     int found = 0;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (inc.incidentId == incId && (strcmp(inc.status, "OPEN") == 0 || strcmp(inc.status, "DETECTED") == 0)) {
             char prev[20];
             strcpy(prev, inc.status);
@@ -197,6 +206,8 @@ int assignIncident(int incId, int actorId, const char* actorRole, int assignToUs
     Incident inc;
     int found = 0;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (inc.incidentId == incId && strcmp(inc.status, "CLOSED") != 0 && strcmp(inc.status, "RESOLVED") != 0) {
             char prev[20];
             strcpy(prev, inc.status);
@@ -235,6 +246,8 @@ int investigateIncident(int incId, int actorId, const char* actorRole, const cha
     Incident inc;
     int found = 0;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (inc.incidentId == incId && (strcmp(inc.status, "ASSIGNED") == 0 || strcmp(inc.status, "ACKNOWLEDGED") == 0 || strcmp(inc.status, "OPEN") == 0)) {
             char prev[20];
             strcpy(prev, inc.status);
@@ -267,6 +280,8 @@ int actionIncident(int incId, int actorId, const char* actorRole, const char* ac
     Incident inc;
     int found = 0;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (inc.incidentId == incId && strcmp(inc.status, "CLOSED") != 0 && strcmp(inc.status, "RESOLVED") != 0) {
             char prev[20];
             strcpy(prev, inc.status);
@@ -301,6 +316,8 @@ int resolveIncidentWithAudit(int incId, int actorId, const char* actorRole, cons
     Incident inc;
     int found = 0;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (inc.incidentId == incId && strcmp(inc.status, "CLOSED") != 0) {
             char prev[20];
             strcpy(prev, inc.status);
@@ -334,6 +351,8 @@ int closeIncident(int incId, int actorId, const char* actorRole, const char* not
     Incident inc;
     int found = 0;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (inc.incidentId == incId && strcmp(inc.status, "RESOLVED") == 0) {
             char prev[20];
             strcpy(prev, inc.status);
@@ -367,6 +386,8 @@ int reopenIncident(int incId, int actorId, const char* actorRole, const char* no
     Incident inc;
     int found = 0;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (inc.incidentId == incId && (strcmp(inc.status, "CLOSED") == 0 || strcmp(inc.status, "RESOLVED") == 0)) {
             char prev[20];
             strcpy(prev, inc.status);
@@ -425,12 +446,14 @@ void evaluateHubAlerts() {
 
     LocalHub hub;
     while (fread(&hub, sizeof(LocalHub), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(hub.workspaceId, g_current_workspace) != 0) continue;
         float currentInv = 0.0f;
         FILE *tfp = fopen(HUB_TRANSACTIONS_FILE, "rb");
         if (tfp) {
             HubInventoryTransaction tx;
             while (fread(&tx, sizeof(HubInventoryTransaction), 1, tfp) == 1) {
-                if (tx.hubId == hub.hubId) {
+if (tx.hubId == hub.hubId) {
                     if (strstr(tx.transactionType, "INBOUND") != NULL) currentInv += tx.quantityKg;
                     else if (strstr(tx.transactionType, "OUTBOUND") != NULL) currentInv -= tx.quantityKg;
                 }
@@ -467,6 +490,8 @@ void evaluateCollectionAlerts() {
 
     CollectionRequest req;
     while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
         if (req.status == COLLECTION_MISSED) {
             if (!isAlertActive("MISSED_COLLECTION", req.collectionId)) {
                 char msg[512];
@@ -498,6 +523,8 @@ void evaluateVehicleAlerts() {
     if (fp) {
         VehicleInspection ins;
         while (fread(&ins, sizeof(VehicleInspection), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(ins.workspaceId, g_current_workspace) != 0) continue;
             if (ins.inspectionStatus == INSPECT_FAIL) {
                 if (!isAlertActive("VEHICLE_INSPECTION_FAILURE", ins.vehicleId)) {
                     char msg[512];
@@ -518,6 +545,8 @@ void evaluateRouteAlerts() {
 
     Route rt;
     while (fread(&rt, sizeof(Route), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(rt.workspaceId, g_current_workspace) != 0) continue;
         if (rt.status == ROUTE_ABORTED || rt.status == ROUTE_VEHICLE_BREAKDOWN || rt.status == ROUTE_EMERGENCY) {
             if (!isAlertActive("ROUTE_EXCEPTION", rt.routeId)) {
                 char msg[512];
@@ -537,6 +566,8 @@ void evaluateTransferAlerts() {
 
     WasteTransfer trf;
     while (fread(&trf, sizeof(WasteTransfer), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(trf.workspaceId, g_current_workspace) != 0) continue;
         if (trf.status == TRANSFER_REJECTED) {
             if (!isAlertActive("FACILITY_REJECTION", trf.transferId)) {
                 char msg[512];
@@ -562,6 +593,8 @@ void evaluateRecyclingAlerts() {
 
     RecyclingBatch b;
     while (fread(&b, sizeof(RecyclingBatch), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(b.workspaceId, g_current_workspace) != 0) continue;
         if (b.status == BATCH_COMPLETED && b.inputWeightKg > 0.0f) {
             float outTotal = b.recoveredWeightKg + b.residualWeightKg;
             if (outTotal > b.inputWeightKg + 0.1f) {
@@ -584,6 +617,8 @@ void evaluateQRAlerts() {
 
     QREvent qe;
     while (fread(&qe, sizeof(QREvent), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(qe.workspaceId, g_current_workspace) != 0) continue;
         if (qe.result == QR_FAILED) {
             if (!isAlertActive("QR_FAILURE", qe.eventId)) {
                 char msg[512];
@@ -605,6 +640,8 @@ void evaluateIncidentEscalation() {
 
     Incident inc;
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         if (strcmp(inc.status, "OPEN") == 0 || strcmp(inc.status, "DETECTED") == 0) {
             if (strcmp(inc.severity, "CRITICAL") == 0 && inc.escalationLevel == 0) {
                 inc.escalationLevel = 1;
@@ -653,7 +690,7 @@ int getNotificationPreferences(int userId, NotificationPreference* prefs) {
 
     NotificationPreference temp;
     while (fread(&temp, sizeof(NotificationPreference), 1, fp) == 1) {
-        if (temp.userId == userId) {
+if (temp.userId == userId) {
             *prefs = temp;
             break;
         }
@@ -673,7 +710,7 @@ int saveNotificationPreferences(const NotificationPreference* prefs) {
     if (fp) {
         NotificationPreference temp;
         while (fread(&temp, sizeof(NotificationPreference), 1, fp) == 1) {
-            if (temp.userId == prefs->userId) {
+if (temp.userId == prefs->userId) {
                 fwrite(prefs, sizeof(NotificationPreference), 1, tfp);
                 found = 1;
             } else {

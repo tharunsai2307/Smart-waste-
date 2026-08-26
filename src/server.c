@@ -6,6 +6,9 @@
 #include "types.h"
 #include "config.h"
 #include "hub.h"
+#include "auth.h"
+#include "permissions.h"
+#include "workspace.h"
 #include "user.h"
 #include "resident.h"
 #include "location.h"
@@ -29,6 +32,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+extern char g_current_workspace[37];
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -113,6 +117,125 @@ static void jsonStr(char *dest, size_t dsz, const char *src) {
     dest[di] = 0;
 }
 
+static int getAuthenticatedUser(struct mg_http_message *hm, User *outUser) {
+    struct mg_str *authHeader = mg_http_get_header(hm, "Authorization");
+    if (!authHeader) return 0;
+    
+    char idStr[32] = {0};
+    snprintf(idStr, sizeof(idStr), "%.*s", (int)authHeader->len, authHeader->buf);
+    int userId = atoi(idStr);
+    
+    if (userId > 0) {
+        return getUserById(userId, outUser);
+    }
+    return 0;
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/workspaces
+// ─────────────────────────────────────────────────────────────
+static void handleGetWorkspaces(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) {
+        sendJsonResponse(c, 401, "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    // Only GLOBAL_ADMIN or MUNICIPAL_ADMIN can list workspaces (if we want to restrict, but maybe let them see theirs)
+    if (!has_permission(&u, PERM_MANAGE_WORKSPACE, g_current_workspace) && u.role != ROLE_ADMIN) {
+        // If not global admin, just return their own workspace
+        Workspace w;
+        if (getWorkspace(u.workspaceId, &w)) {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "[{\"workspaceId\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"createdAt\":\"%s\"}]",
+                w.workspaceId, w.name, w.description, w.createdAt);
+            sendJsonResponse(c, 200, buf);
+            return;
+        }
+        sendJsonResponse(c, 200, "[]");
+        return;
+    }
+
+    FILE *fp = fopen("data/workspaces.dat", "rb");
+    if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
+
+    char *buf = malloc(65536);
+    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
+    strcpy(buf, "[");
+    int first = 1;
+    Workspace w;
+    while (fread(&w, sizeof(Workspace), 1, fp) == 1) {
+        char entry[1024];
+        snprintf(entry, sizeof(entry), "%s{\"workspaceId\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"createdAt\":\"%s\"}",
+            first ? "" : ",", w.workspaceId, w.name, w.description, w.createdAt);
+        strcat(buf, entry);
+        first = 0;
+    }
+    strcat(buf, "]");
+    fclose(fp);
+    sendJsonResponse(c, 200, buf);
+    free(buf);
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/workspaces
+// ─────────────────────────────────────────────────────────────
+static void handlePostWorkspace(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u) || u.role != ROLE_ADMIN) {
+        sendJsonResponse(c, 403, "{\"error\":\"Forbidden\"}");
+        return;
+    }
+
+    char name[128] = "", description[256] = "";
+    mg_json_unescape(hm->body, "$.name", name, sizeof(name));
+    mg_json_unescape(hm->body, "$.description", description, sizeof(description));
+
+    char newId[37];
+    if (createWorkspace(name, description, newId)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"workspaceId\":\"%s\"}", newId);
+        sendJsonResponse(c, 200, buf);
+        
+        // Audit
+        FILE *af = fopen("data/audit.dat", "ab");
+        if (af) {
+            AuditLog al = {0};
+            al.actorId = u.userId;
+            strcpy(al.action, "CREATE_WORKSPACE");
+            al.targetId = 0;
+            strcpy(al.workspaceId, newId);
+            time_t now = time(NULL);
+            strftime(al.timestamp, sizeof(al.timestamp), "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+            fwrite(&al, sizeof(AuditLog), 1, af);
+            fclose(af);
+        }
+    } else {
+        sendJsonResponse(c, 500, "{\"error\":\"Failed to create\"}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/workspaces/current
+// ─────────────────────────────────────────────────────────────
+static void handleGetCurrentWorkspace(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) {
+        sendJsonResponse(c, 401, "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+
+    Workspace w;
+    if (getWorkspace(g_current_workspace, &w)) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "{\"workspaceId\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"createdAt\":\"%s\"}",
+            w.workspaceId, w.name, w.description, w.createdAt);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 404, "{\"error\":\"Not Found\"}");
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 // POST /api/auth/login
 // ─────────────────────────────────────────────────────────────
@@ -126,8 +249,8 @@ static void handleLogin(struct mg_connection *c, struct mg_http_message *hm) {
     if (result == 1) {
         char buf[512];
         snprintf(buf, sizeof(buf),
-            "{\"success\":true,\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\"}",
-            user.userId, user.name, user.username, roleToStr(user.role));
+            "{\"success\":true,\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\",\"workspaceId\":\"%s\"}",
+            user.userId, user.name, user.username, roleToStr(user.role), user.workspaceId);
         sendJsonResponse(c, 200, buf);
     } else {
         sendJsonResponse(c, 401, "{\"success\":false,\"message\":\"Invalid credentials\"}");
@@ -137,7 +260,7 @@ static void handleLogin(struct mg_connection *c, struct mg_http_message *hm) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/bins
 // ─────────────────────────────────────────────────────────────
-static void handleGetBins(struct mg_connection *c) {
+static void handleGetBins(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(BINS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
@@ -149,6 +272,8 @@ static void handleGetBins(struct mg_connection *c) {
     int first = 1;
     Bin b;
     while (fread(&b, sizeof(Bin), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(b.workspaceId, g_current_workspace) != 0) continue;
         float fill = b.capacity > 0 ? (b.currentLevel / b.capacity) * 100.0f : 0;
         char loc[128], wt[64];
         jsonStr(loc, sizeof(loc), b.location);
@@ -173,7 +298,7 @@ static void handleGetBins(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/vehicles
 // ─────────────────────────────────────────────────────────────
-static void handleGetVehicles(struct mg_connection *c) {
+static void handleGetVehicles(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(VEHICLES_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
@@ -184,6 +309,8 @@ static void handleGetVehicles(struct mg_connection *c) {
     int first = 1;
     Vehicle v;
     while (fread(&v, sizeof(Vehicle), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(v.workspaceId, g_current_workspace) != 0) continue;
         float loadPct = v.capacityKg > 0 ? (v.currentLoad / v.capacityKg) * 100.0f : 0;
         char num[32], drv[64];
         jsonStr(num, sizeof(num), v.vehicleNumber);
@@ -206,7 +333,7 @@ static void handleGetVehicles(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/collections
 // ─────────────────────────────────────────────────────────────
-static void handleGetCollections(struct mg_connection *c) {
+static void handleGetCollections(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(COLLECTIONS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
@@ -217,6 +344,8 @@ static void handleGetCollections(struct mg_connection *c) {
     int first = 1;
     CollectionRequest req;
     while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
         char pl[32], rd[24], cd[24];
         jsonStr(pl, sizeof(pl), req.priorityLevel);
         jsonStr(rd, sizeof(rd), req.createdAt);
@@ -243,7 +372,7 @@ static void handleGetCollections(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/residents
 // ─────────────────────────────────────────────────────────────
-static void handleGetResidents(struct mg_connection *c) {
+static void handleGetResidents(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(RESIDENTS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
@@ -254,6 +383,8 @@ static void handleGetResidents(struct mg_connection *c) {
     int first = 1;
     Resident r;
     while (fread(&r, sizeof(Resident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(r.workspaceId, g_current_workspace) != 0) continue;
         char addr[128], area[64];
         jsonStr(addr, sizeof(addr), r.address);
         jsonStr(area, sizeof(area), r.area);
@@ -274,7 +405,7 @@ static void handleGetResidents(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/waste
 // ─────────────────────────────────────────────────────────────
-static void handleGetWaste(struct mg_connection *c) {
+static void handleGetWaste(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(WASTE_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
@@ -285,6 +416,8 @@ static void handleGetWaste(struct mg_connection *c) {
     int first = 1;
     Waste w;
     while (fread(&w, sizeof(Waste), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(w.workspaceId, g_current_workspace) != 0) continue;
         char wt[64], dt[24];
         jsonStr(wt, sizeof(wt), w.wasteType);
         jsonStr(dt, sizeof(dt), w.date);
@@ -310,7 +443,7 @@ static void handleGetWaste(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/alerts
 // ─────────────────────────────────────────────────────────────
-static void handleGetAlerts(struct mg_connection *c) {
+static void handleGetAlerts(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(ALERTS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
@@ -321,6 +454,8 @@ static void handleGetAlerts(struct mg_connection *c) {
     int first = 1;
     Alert a;
     while (fread(&a, sizeof(Alert), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(a.workspaceId, g_current_workspace) != 0) continue;
         char tp[64], msg[256], dt[24];
         jsonStr(tp, sizeof(tp), a.type);
         jsonStr(msg, sizeof(msg), a.message);
@@ -343,7 +478,7 @@ static void handleGetAlerts(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/recycling
 // ─────────────────────────────────────────────────────────────
-static void handleGetRecycling(struct mg_connection *c) {
+static void handleGetRecycling(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(RECYCLING_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
@@ -354,7 +489,7 @@ static void handleGetRecycling(struct mg_connection *c) {
     int first = 1;
     RecyclingRecord rr;
     while (fread(&rr, sizeof(RecyclingRecord), 1, fp) == 1) {
-        char wt[64];
+char wt[64];
         jsonStr(wt, sizeof(wt), rr.wasteType);
         char entry[256];
         snprintf(entry, sizeof(entry),
@@ -377,7 +512,7 @@ static void handleGetRecycling(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/analytics/dashboard
 // ─────────────────────────────────────────────────────────────
-static void handleGetDashboard(struct mg_connection *c) {
+static void handleGetDashboard(struct mg_connection *c, struct mg_http_message *hm) {
     int numResidents = 0, numBins = 0, numVehicles = 0;
     int normalBins = 0, warningBins = 0, criticalBins = 0, overflowBins = 0;
     int pendingCollections = 0, activeCollections = 0, completedCollections = 0;
@@ -567,7 +702,7 @@ static void handleAddWaste(struct mg_connection *c, struct mg_http_message *hm) 
 // ─────────────────────────────────────────────────────────────
 // POST /api/collections/process
 // ─────────────────────────────────────────────────────────────
-static void handleProcessCollection(struct mg_connection *c) {
+static void handleProcessCollection(struct mg_connection *c, struct mg_http_message *hm) {
     // processNextCollection();
     sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Highest priority collection processed\"}");
 }
@@ -577,7 +712,7 @@ static void handleProcessCollection(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 
 // Phase 7 Routing Handlers
-static void handleGetRoutes(struct mg_connection *c) {
+static void handleGetRoutes(struct mg_connection *c, struct mg_http_message *hm) {
     Route arr[100];
     int count = getRoutes(arr, 100);
     char buf[8192];
@@ -861,6 +996,8 @@ static void handleGetIncidentsPhase10(struct mg_connection *c, struct mg_http_me
     Incident inc;
 
     while (fread(&inc, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(inc.workspaceId, g_current_workspace) != 0) continue;
         // Filters
         if (strlen(statusFilter) > 0 && strcmp(inc.status, statusFilter) != 0) continue;
         if (strlen(severityFilter) > 0 && strcmp(inc.severity, severityFilter) != 0) continue;
@@ -1087,7 +1224,7 @@ static void handleAddIncidentCommentAPI(struct mg_connection *c, struct mg_http_
     }
 }
 
-static void handleGetUnreadAlerts(struct mg_connection *c) {
+static void handleGetUnreadAlerts(struct mg_connection *c, struct mg_http_message *hm) {
     runAlertEvaluationCycle();
 
     FILE *fp = fopen(ALERTS_FILE, "rb");
@@ -1100,6 +1237,8 @@ static void handleGetUnreadAlerts(struct mg_connection *c) {
     int first = 1;
     Alert a;
     while (fread(&a, sizeof(Alert), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(a.workspaceId, g_current_workspace) != 0) continue;
         if (a.resolved == 0) {
             char type[64], msg[256], dt[64];
             jsonStr(type, sizeof(type), a.type);
@@ -1691,7 +1830,7 @@ static void handleReportsExport(struct mg_connection *c, struct mg_http_message 
     free(csvBuf);
 }
 
-static void handleDemoReset(struct mg_connection *c) {
+static void handleDemoReset(struct mg_connection *c, struct mg_http_message *hm) {
     remove(USERS_FILE); remove(RESIDENTS_FILE); remove(WASTE_FILE);
     remove(BINS_FILE); remove(VEHICLES_FILE); remove(COLLECTIONS_FILE);
     remove(RECYCLING_FILE); remove(ALERTS_FILE);
@@ -1713,7 +1852,7 @@ static void handleDemoReset(struct mg_connection *c) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/locations  (graph nodes for the 3D scene)
 // ─────────────────────────────────────────────────────────────
-static void handleGetLocations(struct mg_connection *c) {
+static void handleGetLocations(struct mg_connection *c, struct mg_http_message *hm) {
     char buf[4096] = "[";
     int first = 1;
     for (int i = 0; i < MAX_LOCATIONS; i++) {
@@ -1737,7 +1876,7 @@ static void handleGetLocations(struct mg_connection *c) {
 // STAGE B: PHASE 2 HUB APIs
 // ─────────────────────────────────────────────────────────────
 
-static void handleGetAllHubs(struct mg_connection *c) {
+static void handleGetAllHubs(struct mg_connection *c, struct mg_http_message *hm) {
     LocalHub hubs[50];
     int count = getAllHubs(hubs, 50);
     
@@ -1806,7 +1945,7 @@ static void handleGetHubTransactions(struct mg_connection *c, struct mg_http_mes
 // STAGE C: PHASE 3 COLLECTION APIs
 // ─────────────────────────────────────────────────────────────
 
-static void handleGetAllCollections(struct mg_connection *c) {
+static void handleGetAllCollections(struct mg_connection *c, struct mg_http_message *hm) {
     CollectionRequest list[100];
     int count = getAllCollectionRequests(list, 100);
     char body[8192] = "{\"success\":true,\"collections\":[";
@@ -1854,7 +1993,7 @@ static void handleCollectionAction(struct mg_connection *c, struct mg_http_messa
 // STAGE D: PHASE 4 DRIVER / VEHICLE / TRANSFER APIs
 // ─────────────────────────────────────────────────────────────
 
-static void handleGetAllTransfers(struct mg_connection *c) {
+static void handleGetAllTransfers(struct mg_connection *c, struct mg_http_message *hm) {
     WasteTransfer list[100];
     int count = getAllTransfers(list, 100);
     char body[8192] = "{\"success\":true,\"transfers\":[";
@@ -1873,7 +2012,7 @@ static void handleGetAllTransfers(struct mg_connection *c) {
 // STAGE E: PHASE 5 RECYCLING / FACILITIES APIs
 // ─────────────────────────────────────────────────────────────
 
-static void handleGetAllFacilities(struct mg_connection *c) {
+static void handleGetAllFacilities(struct mg_connection *c, struct mg_http_message *hm) {
     TransportFacility list[50];
     int count = getAllFacilities(list, 50);
     char body[8192] = "{\"success\":true,\"facilities\":[";
@@ -1888,7 +2027,7 @@ static void handleGetAllFacilities(struct mg_connection *c) {
     sendJsonResponse(c, 200, body);
 }
 
-static void handleGetRecyclingBatches(struct mg_connection *c) {
+static void handleGetRecyclingBatches(struct mg_connection *c, struct mg_http_message *hm) {
     RecyclingBatch list[100];
     int count = getAllBatches(list, 100);
     char body[8192] = "{\"success\":true,\"batches\":[";
@@ -1907,7 +2046,7 @@ static void handleGetRecyclingBatches(struct mg_connection *c) {
 // STAGE F: INCIDENTS / ROUTING / ANALYTICS
 // ─────────────────────────────────────────────────────────────
 
-static void handleGetAllIncidents(struct mg_connection *c) {
+static void handleGetAllIncidents(struct mg_connection *c, struct mg_http_message *hm) {
     Incident list[100];
     int count = getAllIncidents(list, 100);
     char body[8192] = "{\"success\":true,\"incidents\":[";
@@ -1927,9 +2066,25 @@ static void handlePostAction(struct mg_connection *c, struct mg_http_message *hm
     sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Generic post action processed\"}");
 }
 
+char g_current_workspace[37] = {0};
+
+
+
 static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev != MG_EV_HTTP_MSG) return;
     struct mg_http_message *hm = (struct mg_http_message *)ev_data;
+
+    User user;
+    if (getAuthenticatedUser(hm, &user)) {
+        struct mg_str *wsHeader = mg_http_get_header(hm, "X-Workspace-Id");
+        if (wsHeader != NULL && wsHeader->len > 0 && user.role == ROLE_ADMIN) {
+            snprintf(g_current_workspace, sizeof(g_current_workspace), "%.*s", (int)wsHeader->len, wsHeader->buf);
+        } else {
+            strncpy(g_current_workspace, user.workspaceId, sizeof(g_current_workspace)-1);
+        }
+    } else {
+        g_current_workspace[0] = '\0';
+    }
 
     // CORS preflight
     if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
@@ -1946,17 +2101,20 @@ static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
 
     if      (mg_match(hm->uri, mg_str("/api/health"), NULL))                           sendJsonResponse(c, 200, "{\"status\":\"online\",\"server\":\"Smart City Waste Intelligence\"}");
     else if (isPost && mg_match(hm->uri, mg_str("/api/auth/login"), NULL))             handleLogin(c, hm);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs"), NULL))                   handleGetAllHubs(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces/current"), NULL))     handleGetCurrentWorkspace(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))             handleGetWorkspaces(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))             handlePostWorkspace(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs"), NULL))                   handleGetAllHubs(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/my-hub"), NULL))            handleGetMyHub(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/transactions"), NULL))      handleGetHubTransactions(c, hm);
-else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/all"), NULL))        handleGetAllCollections(c);
+else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/all"), NULL))        handleGetAllCollections(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/resident"), NULL))   handleCollectionResident(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/cleaner"), NULL))    handleCollectionCleaner(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/collections/*"), NULL))          handleCollectionAction(c, hm);
-else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))              handleGetAllTransfers(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/facilities"), NULL))   handleGetAllFacilities(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/batches"), NULL))      handleGetRecyclingBatches(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/incidents"), NULL))              handleGetAllIncidents(c);
+else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))              handleGetAllTransfers(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/facilities"), NULL))   handleGetAllFacilities(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/batches"), NULL))      handleGetRecyclingBatches(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/incidents"), NULL))              handleGetAllIncidents(c, hm);
 
     else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/locations"), NULL)) {
         GeoLocation list[100];
@@ -2011,15 +2169,15 @@ else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))           
         sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"GIS Action\"}");
     }
 
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/bins"), NULL))                   handleGetBins(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/vehicles"), NULL))               handleGetVehicles(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/collections"), NULL))            handleGetCollections(c);
-    else if (isPost && mg_match(hm->uri, mg_str("/api/collections/process"), NULL))    handleProcessCollection(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/residents"), NULL))              handleGetResidents(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/waste"), NULL))                  handleGetWaste(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/bins"), NULL))                   handleGetBins(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/vehicles"), NULL))               handleGetVehicles(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/collections"), NULL))            handleGetCollections(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/collections/process"), NULL))    handleProcessCollection(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/residents"), NULL))              handleGetResidents(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/waste"), NULL))                  handleGetWaste(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/waste"), NULL))                  handleAddWaste(c, hm);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/alerts"), NULL))                 handleGetAlerts(c);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling"), NULL))              handleGetRecycling(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/alerts"), NULL))                 handleGetAlerts(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling"), NULL))              handleGetRecycling(c, hm);
     
     // Phase 9: Analytics & Reports APIs
     
@@ -2036,7 +2194,7 @@ else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))           
     else if (isGet  && mg_match(hm->uri, mg_str("/api/incidents/#"), NULL))             handleGetIncidentDetail(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/incidents"), NULL))                handleGetIncidentsPhase10(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/incidents"), NULL))               handleCreateIncidentManual(c, hm);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/alerts/unread"), NULL))           handleGetUnreadAlerts(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/alerts/unread"), NULL))           handleGetUnreadAlerts(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/alerts/*/acknowledge"), NULL))    handleAcknowledgeAlertAPI(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/notifications/preferences"), NULL)) handleGetNotificationPreferencesAPI(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/notifications/preferences"), NULL)) handleSaveNotificationPreferencesAPI(c, hm);
@@ -2055,11 +2213,11 @@ else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))           
     else if (isGet  && mg_match(hm->uri, mg_str("/api/analytics/trends"), NULL))       handleAnalyticsTrends(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/analytics/live-feed"), NULL))    handleAnalyticsLiveFeed(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/reports/export"), NULL))         handleReportsExport(c, hm);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/analytics/dashboard"), NULL))   handleGetDashboard(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/analytics/dashboard"), NULL))   handleGetDashboard(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/route/#"), NULL))               handleGetRoute(c, hm);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/locations"), NULL))              handleGetLocations(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/locations"), NULL))              handleGetLocations(c, hm);
 
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/routes"), NULL))               handleGetRoutes(c);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/routes"), NULL))               handleGetRoutes(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/routes/plan"), NULL))          handlePlanCollectionRoute(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/routes/transfer/plan"), NULL)) handlePlanTransferRoute(c, hm);
     
@@ -2080,7 +2238,13 @@ else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))           
     else if (isPost && mg_match(hm->uri, mg_str("/api/driver/inspection"), NULL))      handleDriverInspection(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/hubs/*/arrival"), NULL))         handleHubArrival(c, hm);
 
-    else if (isPost && mg_match(hm->uri, mg_str("/api/demo/reset"), NULL))             handleDemoReset(c);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/demo/reset"), NULL))             handleDemoReset(c, hm);
+    
+    // Phase 11: Workspace Management APIs
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))              handleGetWorkspaces(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))              handlePostWorkspace(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces/current"), NULL))      handleGetCurrentWorkspace(c, hm);
+    
     else if (isPost && mg_match(hm->uri, mg_str("/api/*"), NULL))                      handlePostAction(c, hm);
     else sendJsonResponse(c, 404, "{\"error\":\"Not found\"}");
 }
@@ -2114,6 +2278,7 @@ void startServer(const char *port) {
     initFacilityData();
     initRecyclingData();
     initIncidentsData();
+    initWorkspaces();
 
     printf("  [READY] All modules initialized\n\n");
     for (;;) mg_mgr_poll(&mgr, 500);

@@ -1,5 +1,6 @@
 #include "resident.h"
 #include "utils.h"
+extern char g_current_workspace[37];
 
 void initResidentsData() {
     FILE *fp = fopen(RESIDENTS_FILE, "rb");
@@ -80,6 +81,8 @@ int updateResident(const Resident *res) {
     Resident temp;
     int found = 0;
     while (fread(&temp, sizeof(Resident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.residentId == res->residentId) {
             fwrite(res, sizeof(Resident), 1, tempFp);
             found = 1;
@@ -112,6 +115,8 @@ int deleteResident(int resId) {
     Resident temp;
     int found = 0;
     while (fread(&temp, sizeof(Resident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.residentId == resId) {
             found = 1;
         } else {
@@ -135,6 +140,8 @@ void displayAllResidents() {
     printf("%s", SUB_LINE);
     Resident temp;
     while (fread(&temp, sizeof(Resident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         printf("%-5d %-10d %-30s %-20s %-10d\n", 
                temp.residentId, temp.userId, temp.address, temp.area, temp.ecoPoints);
     }

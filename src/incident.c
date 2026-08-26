@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+extern char g_current_workspace[37];
 
 void initIncidentsData() {
     FILE *fp = fopen(INCIDENTS_FILE, "rb");
@@ -24,6 +25,8 @@ int addIncident(Incident *inc) {
     if (fp != NULL) {
         Incident temp;
         while (fread(&temp, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.incidentId > maxId) maxId = temp.incidentId;
         }
         fclose(fp);
@@ -52,6 +55,8 @@ int getIncidentById(int incId, Incident *inc) {
     Incident temp;
     int found = 0;
     while (fread(&temp, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.incidentId == incId) {
             *inc = temp;
             found = 1;
@@ -102,6 +107,8 @@ int resolveIncident(int incId, const char *resolutionNote) {
     getCurrentTimestamp(now, sizeof(now));
 
     while (fread(&temp, sizeof(Incident), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.incidentId == incId) {
             strcpy(temp.status, "RESOLVED");
             strncpy(temp.resolvedAt, now, sizeof(temp.resolvedAt) - 1);

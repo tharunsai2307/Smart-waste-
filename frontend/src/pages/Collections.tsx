@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -6,19 +6,14 @@ import {
   UserCheck,
   AlertTriangle,
   CheckCircle2,
-  Clock,
-  MapPin,
-  Scale,
   Warehouse,
   RotateCcw,
   Search,
-  Filter,
-  ArrowRight,
   ShieldAlert,
   Flame
 } from 'lucide-react';
 import { api } from '../services/api';
-import type { CollectionRequest, HubCleaner, Incident } from '../types';
+import type { CollectionRequest, Incident } from '../types';
 
 export default function CollectionsPage() {
   const qc = useQueryClient();
@@ -41,7 +36,7 @@ export default function CollectionsPage() {
   const [resolutionNote, setResolutionNote] = useState('');
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
 
-  const { data: collections = [], isLoading: loadingColls } = useQuery({
+  const { data: collections = [] } = useQuery({
     queryKey: ['collections'],
     queryFn: api.getCollections,
     refetchInterval: 4000,
@@ -60,7 +55,7 @@ export default function CollectionsPage() {
 
   const { data: incidents = [] } = useQuery({
     queryKey: ['incidents'],
-    queryFn: api.getIncidents,
+    queryFn: () => api.getIncidents(),
     refetchInterval: 5000,
   });
 
@@ -85,7 +80,7 @@ export default function CollectionsPage() {
 
   const resolveIncidentMutation = useMutation({
     mutationFn: ({ incidentId, note }: { incidentId: number; note: string }) =>
-      api.resolveIncident(incidentId, note),
+      api.resolveIncident(incidentId, { note }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['incidents'] });
       setSelectedIncident(null);

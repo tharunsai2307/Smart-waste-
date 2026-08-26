@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+extern char g_current_workspace[37];
 
 // ─────────────────────────────────────────────────────────
 // Status conversions
@@ -114,6 +115,8 @@ int addVehicle(Vehicle *v) {
     if (fp) {
         Vehicle temp;
         while (fread(&temp, sizeof(Vehicle), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.vehicleId > maxId) maxId = temp.vehicleId;
         }
         fclose(fp);
@@ -168,6 +171,8 @@ int updateVehicle(const Vehicle *v) {
     getCurrentTimestamp(now, sizeof(now));
 
     while (fread(&temp, sizeof(Vehicle), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.vehicleId == v->vehicleId) {
             Vehicle updated = *v;
             strncpy(updated.updatedAt, now, sizeof(updated.updatedAt) - 1);
@@ -200,6 +205,8 @@ int deleteVehicle(int vehicleId) {
     Vehicle temp;
     int found = 0;
     while (fread(&temp, sizeof(Vehicle), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.vehicleId != vehicleId) {
             fwrite(&temp, sizeof(Vehicle), 1, tempFp);
         } else {
@@ -269,6 +276,8 @@ void displayAllVehicles() {
     printf("%-5s %-12s %-15s %-15s %-10s %-15s\n",
            "ID", "Code", "Reg No.", "Type", "Cap(kg)", "Status");
     while (fread(&temp, sizeof(Vehicle), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         printf("%-5d %-12s %-15s %-15s %-10.1f %-15s\n",
                temp.vehicleId, temp.vehicleCode, temp.registrationNumber,
                temp.vehicleType, temp.capacityKg, vehicleStatusToStrV2(temp.status));

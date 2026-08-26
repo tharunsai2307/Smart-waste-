@@ -26,6 +26,7 @@ import CleanerFieldOps from './pages/CleanerFieldOps';
 import DriverDashboard from './pages/DriverDashboard';
 import Transfers from './pages/Transfers';
 import VehicleManagement from './pages/VehicleManagement';
+import WorkspaceManagement from './pages/WorkspaceManagement';
 import { GISCommand } from './pages/GISCommand';
 
 const queryClient = new QueryClient({
@@ -74,6 +75,7 @@ function AppContent() {
               <Route path="/" element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
                 <Route index element={<RoleDefaultRedirect />} />
                 <Route path="executive-command" element={<ExecutiveCommand />} />
+                <Route path="workspaces" element={<WorkspaceManagement />} />
                 <Route path="incident-command"  element={<IncidentCommand />} />
                 <Route path="incidents"         element={<IncidentCommand />} />
                 <Route path="dashboard"        element={<Dashboard />} />

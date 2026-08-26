@@ -35,7 +35,7 @@ void processCollectionForRecycling(int collectionId, const char *wasteType, floa
     if (fp != NULL) {
         RecyclingRecord temp;
         while (fread(&temp, sizeof(RecyclingRecord), 1, fp) == 1) {
-            if (temp.recyclingId > maxId) maxId = temp.recyclingId;
+if (temp.recyclingId > maxId) maxId = temp.recyclingId;
         }
         fclose(fp);
     }
@@ -83,7 +83,7 @@ void displayRecyclingReport() {
     
     RecyclingRecord temp;
     while (fread(&temp, sizeof(RecyclingRecord), 1, fp) == 1) {
-        printf("%-5d %-8d %-15s %-10.2f %-10.2f %-10.2f %-10.2f\n", 
+printf("%-5d %-8d %-15s %-10.2f %-10.2f %-10.2f %-10.2f\n", 
                temp.recyclingId, temp.collectionId, temp.wasteType, 
                temp.recyclableQuantity, temp.recycledQuantity, 
                temp.rejectedQuantity, temp.value);
@@ -116,6 +116,7 @@ void displayRecyclingReport() {
 #include "facility.h"
 #include "incident.h"
 #include <math.h>
+extern char g_current_workspace[37];
 
 void touchFile(const char* filename) {
     FILE *fp = fopen(filename, "rb");
@@ -244,6 +245,8 @@ int createRecyclingBatch(RecyclingBatch *batch) {
     if (fp) {
         RecyclingBatch temp;
         while (fread(&temp, sizeof(RecyclingBatch), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.batchId > maxId) maxId = temp.batchId;
         }
         fclose(fp);
@@ -285,6 +288,8 @@ int updateBatch(const RecyclingBatch *batch) {
     RecyclingBatch temp;
     int found = 0;
     while (fread(&temp, sizeof(RecyclingBatch), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.batchId == batch->batchId) {
             fwrite(batch, sizeof(RecyclingBatch), 1, tempFp);
             found = 1;
@@ -333,7 +338,7 @@ int addWasteClassification(WasteClassification *wc) {
     if (fp) {
         WasteClassification temp;
         while (fread(&temp, sizeof(WasteClassification), 1, fp) == 1) {
-            if (temp.classificationId > maxId) maxId = temp.classificationId;
+if (temp.classificationId > maxId) maxId = temp.classificationId;
         }
         fclose(fp);
     }
@@ -367,7 +372,7 @@ int addSegregationRecord(SegregationRecord *sr) {
     if (fp) {
         SegregationRecord temp;
         while (fread(&temp, sizeof(SegregationRecord), 1, fp) == 1) {
-            if (temp.segregationId > maxId) maxId = temp.segregationId;
+if (temp.segregationId > maxId) maxId = temp.segregationId;
         }
         fclose(fp);
     }
@@ -389,7 +394,7 @@ int addProcessingRecord(ProcessingRecord *pr) {
     if (fp) {
         ProcessingRecord temp;
         while (fread(&temp, sizeof(ProcessingRecord), 1, fp) == 1) {
-            if (temp.processingId > maxId) maxId = temp.processingId;
+if (temp.processingId > maxId) maxId = temp.processingId;
         }
         fclose(fp);
     }
@@ -416,7 +421,7 @@ int addRecoveryRecord(RecoveryRecord *rr) {
     if (fp) {
         RecoveryRecord temp;
         while (fread(&temp, sizeof(RecoveryRecord), 1, fp) == 1) {
-            if (temp.recoveryId > maxId) maxId = temp.recoveryId;
+if (temp.recoveryId > maxId) maxId = temp.recoveryId;
         }
         fclose(fp);
     }
@@ -445,7 +450,7 @@ int addResidualRecord(ResidualRecord *rr) {
     if (fp) {
         ResidualRecord temp;
         while (fread(&temp, sizeof(ResidualRecord), 1, fp) == 1) {
-            if (temp.residualId > maxId) maxId = temp.residualId;
+if (temp.residualId > maxId) maxId = temp.residualId;
         }
         fclose(fp);
     }

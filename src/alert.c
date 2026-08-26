@@ -1,6 +1,7 @@
 #include "alert.h"
 #include "utils.h"
 #include <time.h>
+extern char g_current_workspace[37];
 
 void initAlertsData() {
     FILE *fp = fopen(ALERTS_FILE, "rb");
@@ -27,6 +28,8 @@ void generateAlert(const char *type, int referenceId, const char *message) {
     if (fp != NULL) {
         Alert temp;
         while (fread(&temp, sizeof(Alert), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.resolved == 0 && temp.referenceId == referenceId && strcmp(temp.type, type) == 0) {
                 // Duplicate alert found; do not create duplicate
                 fclose(fp);
@@ -45,6 +48,8 @@ void generateAlert(const char *type, int referenceId, const char *message) {
     if (rfp != NULL) {
         Alert temp;
         while (fread(&temp, sizeof(Alert), 1, rfp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.alertId > maxId) maxId = temp.alertId;
         }
         fclose(rfp);
@@ -86,6 +91,8 @@ void displayActiveAlerts() {
     printf("%-5s %-15s %-10s %-15s %s\n", "ID", "Type", "Ref_ID", "Date", "Message");
     printf("%s", SUB_LINE);
     while (fread(&temp, sizeof(Alert), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.resolved == 0) {
             printf("%-5d %-15s %-10d %-15s %s\n", 
                 temp.alertId, temp.type, temp.referenceId, temp.date, temp.message);
@@ -112,6 +119,8 @@ void resolveAlert(int alertId) {
     Alert temp;
     int found = 0;
     while (fread(&temp, sizeof(Alert), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.alertId == alertId && temp.resolved == 0) {
             temp.resolved = 1;
             fwrite(&temp, sizeof(Alert), 1, tempFp);

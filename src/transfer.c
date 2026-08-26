@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+extern char g_current_workspace[37];
 
 // ─────────────────────────────────────────────────────────
 // Status String Conversions
@@ -229,6 +230,8 @@ int addTransfer(WasteTransfer *t) {
     if (fp) {
         WasteTransfer temp;
         while (fread(&temp, sizeof(WasteTransfer), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
             if (temp.transferId > maxId) maxId = temp.transferId;
         }
         fclose(fp);
@@ -279,6 +282,8 @@ int updateTransfer(const WasteTransfer *t) {
     getCurrentTimestamp(now, sizeof(now));
 
     while (fread(&temp, sizeof(WasteTransfer), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.transferId == t->transferId) {
             WasteTransfer updated = *t;
             strncpy(updated.updatedAt, now, sizeof(updated.updatedAt) - 1);
@@ -341,6 +346,8 @@ int getActiveTransferForDriver(int driverId, WasteTransfer *out) {
     if (fp == NULL) return 0;
     WasteTransfer temp;
     while (fread(&temp, sizeof(WasteTransfer), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.driverId == driverId &&
             temp.status != TRANSFER_COMPLETED &&
             temp.status != TRANSFER_CANCELLED &&
@@ -395,7 +402,7 @@ int addOrUpdateDriverProfile(DriverProfile *dp) {
         char now[30];
         getCurrentTimestamp(now, sizeof(now));
         while (fread(&temp, sizeof(DriverProfile), 1, fp) == 1) {
-            if (temp.userId == dp->userId) {
+if (temp.userId == dp->userId) {
                 DriverProfile updated = *dp;
                 updated.profileId = temp.profileId;
                 strncpy(updated.updatedAt, now, sizeof(updated.updatedAt) - 1);
@@ -417,7 +424,7 @@ int addOrUpdateDriverProfile(DriverProfile *dp) {
     if (fp) {
         DriverProfile temp;
         while (fread(&temp, sizeof(DriverProfile), 1, fp) == 1) {
-            if (temp.profileId > maxId) maxId = temp.profileId;
+if (temp.profileId > maxId) maxId = temp.profileId;
         }
         fclose(fp);
     }
@@ -473,7 +480,7 @@ int setDriverAvailability(int userId, const char *availability, int transferId) 
     getCurrentTimestamp(now, sizeof(now));
 
     while (fread(&temp, sizeof(DriverProfile), 1, fp) == 1) {
-        if (temp.userId == userId) {
+if (temp.userId == userId) {
             strncpy(temp.availability, availability, sizeof(temp.availability) - 1);
             temp.currentTransferId = transferId;
             strncpy(temp.updatedAt, now, sizeof(temp.updatedAt) - 1);

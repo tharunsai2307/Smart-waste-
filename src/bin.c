@@ -2,6 +2,7 @@
 #include "collection.h"
 #include "alert.h"
 #include "utils.h"
+extern char g_current_workspace[37];
 
 void initBinsData() {
     FILE *fp = fopen(BINS_FILE, "rb");
@@ -56,6 +57,8 @@ int updateBin(const Bin *b) {
     Bin temp;
     int found = 0;
     while (fread(&temp, sizeof(Bin), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.binId == b->binId) {
             fwrite(b, sizeof(Bin), 1, tempFp);
             found = 1;
@@ -90,6 +93,8 @@ int deleteBin(int binId) {
     Bin temp;
     int found = 0;
     while (fread(&temp, sizeof(Bin), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         if (temp.binId != binId) {
             fwrite(&temp, sizeof(Bin), 1, tempFp);
         } else {
@@ -121,6 +126,8 @@ void displayAllBins() {
     printf("%-5s %-20s %-10s %-10s %-15s %-10s\n", "ID", "Location", "Capacity", "Level", "Type", "Status(ID)");
     printf("%s", SUB_LINE);
     while (fread(&temp, sizeof(Bin), 1, fp) == 1) {
+        // Workspace Isolation
+        if (g_current_workspace[0] != '\0' && strcmp(temp.workspaceId, g_current_workspace) != 0) continue;
         printf("%-5d %-20s %-10.2f %-10.2f %-15s %-10d\n",
                temp.binId, temp.location, temp.capacity, 
                temp.currentLevel, temp.wasteType, temp.status);
