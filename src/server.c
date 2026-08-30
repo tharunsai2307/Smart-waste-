@@ -11,6 +11,10 @@
 #include "workspace.h"
 #include "user.h"
 #include "resident.h"
+#include "backup.h"
+#include "archive.h"
+#include "system_health.h"
+#include "data_integrity.h"
 #include "location.h"
 #include "gis_route.h"
 #include "route_engine.h"
@@ -32,6 +36,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+#include "security.h"
 extern char g_current_workspace[37];
 
 // ─────────────────────────────────────────────────────────────
@@ -42,18 +48,69 @@ static void sendJsonResponse(struct mg_connection *c, int status, const char *bo
         "Content-Type: application/json\r\n"
         "Access-Control-Allow-Origin: *\r\n"
         "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n"
-        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n",
+        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+        "X-Content-Type-Options: nosniff\r\n"
+        "X-Frame-Options: SAMEORIGIN\r\n"
+        "Referrer-Policy: no-referrer\r\n"
+        "Cache-Control: no-store\r\n",
         "%s", body);
+}
+
+static void sendJsonError(struct mg_connection *c, int status, const char *message) {
+    char body[512];
+    snprintf(body, sizeof(body), "{\"error\":\"%s\"}", message);
+    sendJsonResponse(c, status, body);
+}
+
+// Growable JSON buffer (replaces fixed-size malloc+strcat builders that could
+// overflow once a data file grows beyond the hard-coded capacity).
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} JsonBuf;
+
+static void jbInit(JsonBuf *jb, size_t initial) {
+    if (initial < 1024) initial = 1024;
+    jb->data = (char *)malloc(initial);
+    jb->len = 0;
+    jb->cap = jb->data ? initial : 0;
+    if (jb->data) jb->data[0] = '\0';
+}
+
+static void jbAppend(JsonBuf *jb, const char *s, size_t n) {
+    if (!jb->data) return;
+    if (jb->len + n + 1 > jb->cap) {
+        size_t newCap = jb->cap ? jb->cap : 1024;
+        while (jb->len + n + 1 > newCap) newCap *= 2;
+        char *nd = (char *)realloc(jb->data, newCap);
+        if (!nd) return;
+        jb->data = nd;
+        jb->cap = newCap;
+    }
+    memcpy(jb->data + jb->len, s, n);
+    jb->len += n;
+    jb->data[jb->len] = '\0';
+}
+
+static void jbPuts(JsonBuf *jb, const char *s) { jbAppend(jb, s, strlen(s)); }
+
+static void jbFree(JsonBuf *jb) {
+    free(jb->data);
+    jb->data = NULL;
+    jb->len = 0;
+    jb->cap = 0;
 }
 
 static const char* roleToStr(UserRole r) {
     switch (r) {
         case ROLE_ADMIN:              return "ADMIN";
+        case ROLE_MUNICIPAL_ADMIN:    return "MUNICIPAL_ADMIN";
         case ROLE_LOCAL_HUB_MANAGER: return "LOCAL_HUB_MANAGER";
         case ROLE_CLEANER:            return "CLEANER";
         case ROLE_DRIVER:             return "DRIVER";
         case ROLE_RECYCLING_MANAGER:  return "RECYCLING_MANAGER";
-                case ROLE_RESIDENT:           return "RESIDENT";
+        case ROLE_RESIDENT:           return "RESIDENT";
         default:                      return "UNKNOWN";
     }
 }
@@ -117,18 +174,217 @@ static void jsonStr(char *dest, size_t dsz, const char *src) {
     dest[di] = 0;
 }
 
-static int getAuthenticatedUser(struct mg_http_message *hm, User *outUser) {
+// ─────────────────────────────────────────────────────────────
+// Session tokens (Authorization: Bearer <64-hex>)
+// ─────────────────────────────────────────────────────────────
+#define MAX_SESSIONS 256
+#define SESSION_TTL_SECONDS (12 * 60 * 60)
+#define SESSION_SWEEP_INTERVAL_SECONDS 60
+
+typedef struct {
+    bool inUse;
+    char token[65];
+    int userId;
+    char workspaceId[37];
+    char ip[48];
+    time_t createdAt;
+    time_t lastSeen;
+    time_t expiresAt;
+} Session;
+
+static Session g_sessions[MAX_SESSIONS];
+static time_t g_lastSessionSweep = 0;
+
+static void sessionSweep(void) {
+    time_t now = time(NULL);
+    if (now - g_lastSessionSweep < SESSION_SWEEP_INTERVAL_SECONDS) return;
+    g_lastSessionSweep = now;
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].inUse && now >= g_sessions[i].expiresAt) {
+            g_sessions[i].inUse = false;
+            g_sessions[i].token[0] = '\0';
+        }
+    }
+}
+
+static Session *sessionCreate(int userId, const char *workspaceId, const char *ip) {
+    time_t now = time(NULL);
+    sessionSweep();
+    Session *slot = NULL;
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (!g_sessions[i].inUse && !slot) slot = &g_sessions[i];
+    }
+    if (!slot) {
+        // Reuse the oldest slot to keep the server responsive.
+        slot = &g_sessions[0];
+        for (int i = 1; i < MAX_SESSIONS; i++) {
+            if (g_sessions[i].lastSeen < slot->lastSeen) slot = &g_sessions[i];
+        }
+    }
+    char token[65];
+    sw_token_hex(token);
+    memset(slot, 0, sizeof(*slot));
+    slot->inUse = true;
+    snprintf(slot->token, sizeof(slot->token), "%s", token);
+    slot->userId = userId;
+    if (workspaceId) snprintf(slot->workspaceId, sizeof(slot->workspaceId), "%s", workspaceId);
+    if (ip) snprintf(slot->ip, sizeof(slot->ip), "%s", ip);
+    slot->createdAt = now;
+    slot->lastSeen = now;
+    slot->expiresAt = now + SESSION_TTL_SECONDS;
+    return slot;
+}
+
+static Session *sessionFind(const char *token) {
+    if (!token) return NULL;
+    time_t now = time(NULL);
+    sessionSweep();
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].inUse && strcmp(g_sessions[i].token, token) == 0) {
+            if (now >= g_sessions[i].expiresAt) {
+                g_sessions[i].inUse = false;
+                return NULL;
+            }
+            g_sessions[i].lastSeen = now;
+            g_sessions[i].expiresAt = now + SESSION_TTL_SECONDS;
+            return &g_sessions[i];
+        }
+    }
+    return NULL;
+}
+
+static void sessionRevoke(const char *token) {
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (g_sessions[i].inUse && strcmp(g_sessions[i].token, token) == 0) {
+            g_sessions[i].inUse = false;
+            g_sessions[i].token[0] = '\0';
+            return;
+        }
+    }
+}
+
+static bool isValidToken(const char *token) {
+    if (!token || strlen(token) != 64) return false;
+    for (int i = 0; i < 64; i++) {
+        char ch = token[i];
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+              (ch >= 'A' && ch <= 'F')))
+            return false;
+    }
+    return true;
+}
+
+static Session *getSessionFromRequest(struct mg_http_message *hm) {
     struct mg_str *authHeader = mg_http_get_header(hm, "Authorization");
-    if (!authHeader) return 0;
-    
-    char idStr[32] = {0};
-    snprintf(idStr, sizeof(idStr), "%.*s", (int)authHeader->len, authHeader->buf);
-    int userId = atoi(idStr);
-    
-    if (userId > 0) {
-        return getUserById(userId, outUser);
+    if (!authHeader || authHeader->len < 8) return NULL;
+    if (authHeader->len <= 7 || strncmp(authHeader->buf, "Bearer ", 7) != 0) return NULL;
+    char token[65] = {0};
+    snprintf(token, sizeof(token), "%.*s", (int)(authHeader->len - 7), authHeader->buf + 7);
+    if (!isValidToken(token)) return NULL;
+    return sessionFind(token);
+}
+
+static int getAuthenticatedUser(struct mg_http_message *hm, User *outUser) {
+    Session *s = getSessionFromRequest(hm);
+    if (!s) return 0;
+    return getUserById(s->userId, outUser);
+}
+
+static void getRemoteIp(struct mg_connection *c, char *out, size_t outsz) {
+    if (outsz == 0) return;
+    mg_snprintf(out, outsz, "%M", mg_print_ip, &c->rem);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Login rate limiting (per IP+username and per IP)
+// ─────────────────────────────────────────────────────────────
+#define MAX_AUTH_ATTEMPTS_PER_USER 5
+#define MAX_AUTH_ATTEMPTS_PER_IP 20
+#define AUTH_WINDOW_SECONDS 600
+
+typedef struct {
+    char key[160];
+    int count;
+    time_t windowStart;
+} AuthAttempt;
+
+static AuthAttempt g_userAttempts[128];
+static AuthAttempt g_ipAttempts[64];
+static int g_userAttemptIdx = 0;
+static int g_ipAttemptIdx = 0;
+
+static int authBlocked(const char *ip, const char *username) {
+    time_t now = time(NULL);
+    for (int i = 0; i < 128; i++) {
+        if (g_userAttempts[i].key[0] != '\0' && strcmp(g_userAttempts[i].key, username) == 0) {
+            if (now - g_userAttempts[i].windowStart >= AUTH_WINDOW_SECONDS) return 0;
+            if (g_userAttempts[i].count >= MAX_AUTH_ATTEMPTS_PER_USER) return 1;
+        }
+    }
+    for (int i = 0; i < 64; i++) {
+        if (g_ipAttempts[i].key[0] != '\0' && strcmp(g_ipAttempts[i].key, ip) == 0) {
+            if (now - g_ipAttempts[i].windowStart >= AUTH_WINDOW_SECONDS) return 0;
+            if (g_ipAttempts[i].count >= MAX_AUTH_ATTEMPTS_PER_IP) return 1;
+        }
     }
     return 0;
+}
+
+static void authRecordFailure(const char *ip, const char *username) {
+    time_t now = time(NULL);
+    AuthAttempt *slot = NULL;
+    for (int i = 0; i < 128; i++) {
+        if (g_userAttempts[i].key[0] != '\0' && strcmp(g_userAttempts[i].key, username) == 0) {
+            slot = &g_userAttempts[i];
+            break;
+        }
+    }
+    if (!slot) {
+        slot = &g_userAttempts[g_userAttemptIdx++ % 128];
+        memset(slot, 0, sizeof(*slot));
+        snprintf(slot->key, sizeof(slot->key), "%s", username);
+        slot->windowStart = now;
+    }
+    if (now - slot->windowStart >= AUTH_WINDOW_SECONDS) {
+        slot->windowStart = now;
+        slot->count = 0;
+    }
+    slot->count++;
+
+    AuthAttempt *ips = NULL;
+    for (int i = 0; i < 64; i++) {
+        if (g_ipAttempts[i].key[0] != '\0' && strcmp(g_ipAttempts[i].key, ip) == 0) {
+            ips = &g_ipAttempts[i];
+            break;
+        }
+    }
+    if (!ips) {
+        ips = &g_ipAttempts[g_ipAttemptIdx++ % 64];
+        memset(ips, 0, sizeof(*ips));
+        snprintf(ips->key, sizeof(ips->key), "%s", ip);
+        ips->windowStart = now;
+    }
+    if (now - ips->windowStart >= AUTH_WINDOW_SECONDS) {
+        ips->windowStart = now;
+        ips->count = 0;
+    }
+    ips->count++;
+}
+
+static void authClearFailures(const char *ip, const char *username) {
+    time_t now = time(NULL);
+    for (int i = 0; i < 128; i++) {
+        if (g_userAttempts[i].key[0] != '\0' && strcmp(g_userAttempts[i].key, username) == 0) {
+            g_userAttempts[i].count = 0;
+            g_userAttempts[i].windowStart = now;
+        }
+    }
+    for (int i = 0; i < 64; i++) {
+        if (g_ipAttempts[i].key[0] != '\0' && strcmp(g_ipAttempts[i].key, ip) == 0) {
+            g_ipAttempts[i].count = 0;
+            g_ipAttempts[i].windowStart = now;
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -159,22 +415,23 @@ static void handleGetWorkspaces(struct mg_connection *c, struct mg_http_message 
     FILE *fp = fopen("data/workspaces.dat", "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = malloc(65536);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    strcpy(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     Workspace w;
     while (fread(&w, sizeof(Workspace), 1, fp) == 1) {
         char entry[1024];
-        snprintf(entry, sizeof(entry), "%s{\"workspaceId\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"createdAt\":\"%s\"}",
+        int n = snprintf(entry, sizeof(entry), "%s{\"workspaceId\":\"%s\",\"name\":\"%s\",\"description\":\"%s\",\"createdAt\":\"%s\"}",
             first ? "" : ",", w.workspaceId, w.name, w.description, w.createdAt);
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
-    strcat(buf, "]");
+    jbPuts(&jb, "]");
     fclose(fp);
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -244,17 +501,46 @@ static void handleLogin(struct mg_connection *c, struct mg_http_message *hm) {
     mg_json_unescape(hm->body, "$.username", username, sizeof(username));
     mg_json_unescape(hm->body, "$.password", password, sizeof(password));
 
+    char ip[48] = "unknown";
+    getRemoteIp(c, ip, sizeof(ip));
+
+    if (authBlocked(ip, username)) {
+        sendJsonResponse(c, 429, "{\"success\":false,\"message\":\"Too many login attempts. Try again later.\"}");
+        return;
+    }
+
     User user;
     int result = validateLogin(username, password, &user);
     if (result == 1) {
-        char buf[512];
+        authClearFailures(ip, username);
+        Session *s = sessionCreate(user.userId, user.workspaceId, ip);
+        char buf[768];
         snprintf(buf, sizeof(buf),
-            "{\"success\":true,\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\",\"workspaceId\":\"%s\"}",
-            user.userId, user.name, user.username, roleToStr(user.role), user.workspaceId);
+            "{\"success\":true,\"token\":\"%s\",\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\",\"workspaceId\":\"%s\",\"requiresPasswordChange\":%s}",
+            s ? s->token : "", user.userId, user.name, user.username,
+            roleToStr(user.role), user.workspaceId,
+            user.requiresPasswordChange ? "true" : "false");
         sendJsonResponse(c, 200, buf);
     } else {
+        authRecordFailure(ip, username);
         sendJsonResponse(c, 401, "{\"success\":false,\"message\":\"Invalid credentials\"}");
     }
+}
+
+// Returns the first existing workspace id (used as the default workspace for
+// new resident accounts).
+static void getDefaultWorkspaceId(char out[37]) {
+    Workspace w;
+    FILE *fp = fopen("data/workspaces.dat", "rb");
+    if (fp) {
+        if (fread(&w, sizeof(Workspace), 1, fp) == 1 && w.workspaceId[0] != '\0') {
+            snprintf(out, 37, "%s", w.workspaceId);
+            fclose(fp);
+            return;
+        }
+        fclose(fp);
+    }
+    snprintf(out, 37, "global");
 }
 
 static void handleGoogleLogin(struct mg_connection *c, struct mg_http_message *hm) {
@@ -262,6 +548,11 @@ static void handleGoogleLogin(struct mg_connection *c, struct mg_http_message *h
     mg_json_unescape(hm->body, "$.email", email, sizeof(email));
     mg_json_unescape(hm->body, "$.name", name, sizeof(name));
     
+    if (!email[0] || strchr(email, '@') == NULL) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Valid email required\"}");
+        return;
+    }
+
     User u;
     int found = 0;
     FILE *fp = fopen("data/users.dat", "rb");
@@ -276,25 +567,336 @@ static void handleGoogleLogin(struct mg_connection *c, struct mg_http_message *h
     }
     
     if (!found) {
+        // Find the highest userId to avoid collisions (the old time-based id
+        // could collide with existing accounts).
+        int maxId = 0;
+        fp = fopen("data/users.dat", "rb");
+        if (fp) {
+            User t;
+            while (fread(&t, sizeof(User), 1, fp) == 1) {
+                if (t.userId > maxId) maxId = t.userId;
+            }
+            fclose(fp);
+        }
+
         memset(&u, 0, sizeof(User));
-        u.userId = (int)time(NULL) % 100000; // Generate a random ID
+        u.userId = maxId + 1;
         strncpy(u.username, email, sizeof(u.username) - 1);
         strncpy(u.name, name, sizeof(u.name) - 1);
-        hashPassword("google_oauth_dummy", u.password);
+        // Google users do not authenticate with a local password; store the
+        // hash of a random throwaway so the field is never a plaintext secret.
+        {
+            char tmp[65];
+            sw_token_hex(tmp);
+            hashPassword(tmp, u.password);
+        }
         u.role = ROLE_RESIDENT;
-        strncpy(u.workspaceId, "DEFAULT_WORKSPACE", sizeof(u.workspaceId) - 1);
+        u.status = 1; // active
+        u.requiresPasswordChange = 0;
+        getDefaultWorkspaceId(u.workspaceId);
         
         if (!addUser(&u)) {
             sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create user\"}");
             return;
         }
     }
-    
-    char buf[512];
+
+    Resident resident;
+    int hasResidentProfile = getResidentByUserId(u.userId, &resident);
+
+    char ip[48] = "unknown";
+    getRemoteIp(c, ip, sizeof(ip));
+    Session *s = sessionCreate(u.userId, u.workspaceId, ip);
+
+    char buf[768];
     snprintf(buf, sizeof(buf),
-        "{\"success\":true,\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\",\"workspaceId\":\"%s\",\"profileComplete\":%s}",
-        u.userId, u.name, u.username, roleToStr(u.role), u.workspaceId, found ? "true" : "false");
+        "{\"success\":true,\"token\":\"%s\",\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\",\"workspaceId\":\"%s\",\"profileComplete\":%s}",
+        s ? s->token : "", u.userId, u.name, u.username, roleToStr(u.role),
+        u.workspaceId, hasResidentProfile ? "true" : "false");
     sendJsonResponse(c, 200, buf);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Audit log helper
+// ─────────────────────────────────────────────────────────────
+static void appendAudit(int actorId, const char *action, const char *workspaceId) {
+    if (!action) return;
+    FILE *af = fopen("data/audit.dat", "ab");
+    if (!af) return;
+    AuditLog al = {0};
+    al.actorId = actorId;
+    strncpy(al.action, action, sizeof(al.action) - 1);
+    strncpy(al.workspaceId, workspaceId ? workspaceId : "", sizeof(al.workspaceId) - 1);
+    time_t now = time(NULL);
+    strftime(al.timestamp, sizeof(al.timestamp), "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+    fwrite(&al, sizeof(AuditLog), 1, af);
+    fclose(af);
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/auth/me
+// ─────────────────────────────────────────────────────────────
+static void handleAuthMe(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+
+    bool profileComplete = false;
+    if (u.role == ROLE_RESIDENT) {
+        Resident r;
+        profileComplete = getResidentByUserId(u.userId, &r);
+    }
+
+    char buf[768];
+    snprintf(buf, sizeof(buf),
+        "{\"success\":true,\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\",\"workspaceId\":\"%s\",\"requiresPasswordChange\":%s,\"profileComplete\":%s}",
+        u.userId, u.name, u.username, roleToStr(u.role), u.workspaceId,
+        u.requiresPasswordChange ? "true" : "false",
+        profileComplete ? "true" : "false");
+    sendJsonResponse(c, 200, buf);
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/auth/logout
+// ─────────────────────────────────────────────────────────────
+static void handleLogout(struct mg_connection *c, struct mg_http_message *hm) {
+    Session *s = getSessionFromRequest(hm);
+    if (!s) { sendJsonError(c, 401, "Unauthorized"); return; }
+    sessionRevoke(s->token);
+    sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Logged out\"}");
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/auth/change_password
+// ─────────────────────────────────────────────────────────────
+static void handleChangePassword(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+
+    char oldPassword[96] = "", newPassword[96] = "";
+    mg_json_unescape(hm->body, "$.oldPassword", oldPassword, sizeof(oldPassword));
+    mg_json_unescape(hm->body, "$.newPassword", newPassword, sizeof(newPassword));
+
+    if (!sw_verify_password(oldPassword, u.password)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Current password is incorrect\"}");
+        return;
+    }
+    if (!sw_password_meets_policy(newPassword)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Password must be 8+ chars with letters and digits\"}");
+        return;
+    }
+    if (sw_verify_password(newPassword, u.password)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"New password must be different from the current one\"}");
+        return;
+    }
+
+    char hashed[100] = {0};
+    hashPassword(newPassword, hashed);
+    User updated = u;
+    strncpy(updated.password, hashed, sizeof(updated.password) - 1);
+    updated.requiresPasswordChange = 0;
+    updated.failedAttempts = 0;
+    if (updateUser(&updated)) {
+        appendAudit(u.userId, "CHANGE_PASSWORD", u.workspaceId);
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Password updated\"}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update password\"}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/auth/workspace  (admin only: switch session workspace)
+// ─────────────────────────────────────────────────────────────
+static void handleSwitchWorkspace(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    Session *s = getSessionFromRequest(hm);
+    if (!getAuthenticatedUser(hm, &u) || !s) { sendJsonError(c, 401, "Unauthorized"); return; }
+    if (u.role != ROLE_ADMIN) { sendJsonError(c, 403, "Forbidden"); return; }
+
+    char wsId[37] = "";
+    mg_json_unescape(hm->body, "$.workspaceId", wsId, sizeof(wsId));
+    Workspace w;
+    if (!getWorkspace(wsId, &w)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Workspace not found\"}");
+        return;
+    }
+    snprintf(s->workspaceId, sizeof(s->workspaceId), "%s", w.workspaceId);
+    appendAudit(u.userId, "SWITCH_WORKSPACE", w.workspaceId);
+    char buf[512];
+    snprintf(buf, sizeof(buf), "{\"success\":true,\"workspaceId\":\"%s\"}", w.workspaceId);
+    sendJsonResponse(c, 200, buf);
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/residents/profile
+// ─────────────────────────────────────────────────────────────
+static void handleCompleteResidentProfile(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    if (u.role != ROLE_RESIDENT) { sendJsonError(c, 403, "Forbidden"); return; }
+
+    char address[150] = "", area[50] = "", city[50] = "", postal[20] = "", location[50] = "", phone[20] = "";
+    mg_json_unescape(hm->body, "$.address", address, sizeof(address));
+    mg_json_unescape(hm->body, "$.area", area, sizeof(area));
+    mg_json_unescape(hm->body, "$.city", city, sizeof(city));
+    mg_json_unescape(hm->body, "$.postalCode", postal, sizeof(postal));
+    mg_json_unescape(hm->body, "$.location", location, sizeof(location));
+    mg_json_unescape(hm->body, "$.phone", phone, sizeof(phone));
+
+    if (!address[0]) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Address is required\"}");
+        return;
+    }
+
+    Resident r;
+    memset(&r, 0, sizeof(r));
+    int exists = getResidentByUserId(u.userId, &r);
+    if (!exists) {
+        // Collision-safe id: max existing + 1
+        int maxId = 0;
+        FILE *fp = fopen(RESIDENTS_FILE, "rb");
+        if (fp) {
+            Resident t;
+            while (fread(&t, sizeof(Resident), 1, fp) == 1) {
+                if (t.residentId > maxId) maxId = t.residentId;
+            }
+            fclose(fp);
+        }
+        r.residentId = maxId + 1;
+        r.userId = u.userId;
+        snprintf(r.workspaceId, sizeof(r.workspaceId), "%s", u.workspaceId);
+    }
+    snprintf(r.address, sizeof(r.address), "%s", address);
+    snprintf(r.area, sizeof(r.area), "%s", area);
+    snprintf(r.city, sizeof(r.city), "%s", city);
+    snprintf(r.postalCode, sizeof(r.postalCode), "%s", postal);
+    snprintf(r.location, sizeof(r.location), "%s", location);
+    snprintf(r.workspaceId, sizeof(r.workspaceId), "%s", u.workspaceId);
+    snprintf(r.locationStatus, sizeof(r.locationStatus), "UNVERIFIED");
+    snprintf(r.serviceZone, sizeof(r.serviceZone), "DEFAULT");
+
+    double lat = 0.0, lon = 0.0;
+    mg_json_get_num(hm->body, "$.latitude", &lat);
+    mg_json_get_num(hm->body, "$.longitude", &lon);
+    if (lat >= -90 && lat <= 90) r.latitude = lat;
+    if (lon >= -180 && lon <= 180) r.longitude = lon;
+
+    int ok = exists ? updateResident(&r) : addResident(&r);
+    if (ok) {
+        appendAudit(u.userId, "COMPLETE_RESIDENT_PROFILE", u.workspaceId);
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Profile saved\"}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to save profile\"}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/staff/profile
+// ─────────────────────────────────────────────────────────────
+static void handleCompleteStaffProfile(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+
+    char phone[20] = "", name[50] = "";
+    mg_json_unescape(hm->body, "$.phone", phone, sizeof(phone));
+    mg_json_unescape(hm->body, "$.name", name, sizeof(name));
+
+    User updated = u;
+    if (name[0]) snprintf(updated.name, sizeof(updated.name), "%s", name);
+    if (phone[0]) snprintf(updated.phone, sizeof(updated.phone), "%s", phone);
+
+    double hub = 0.0;
+    if (mg_json_get_num(hm->body, "$.assignedHub", &hub) && hub > 0) updated.assignedHub = (int)hub;
+
+    if (updateUser(&updated)) {
+        appendAudit(u.userId, "COMPLETE_STAFF_PROFILE", u.workspaceId);
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Profile saved\"}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to save profile\"}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/admin/staff  (ADMIN only: create staff accounts)
+// ─────────────────────────────────────────────────────────────
+static bool parseRoleStr(const char *roleStr, UserRole *out) {
+    if (!roleStr || !out) return false;
+    if (strcmp(roleStr, "MUNICIPAL_ADMIN") == 0) *out = ROLE_MUNICIPAL_ADMIN;
+    else if (strcmp(roleStr, "LOCAL_HUB_MANAGER") == 0) *out = ROLE_LOCAL_HUB_MANAGER;
+    else if (strcmp(roleStr, "CLEANER") == 0) *out = ROLE_CLEANER;
+    else if (strcmp(roleStr, "DRIVER") == 0) *out = ROLE_DRIVER;
+    else if (strcmp(roleStr, "RECYCLING_MANAGER") == 0) *out = ROLE_RECYCLING_MANAGER;
+    else return false;
+    return true;
+}
+
+static void handleCreateStaff(struct mg_connection *c, struct mg_http_message *hm) {
+    User admin;
+    if (!getAuthenticatedUser(hm, &admin)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    if (admin.role != ROLE_ADMIN) { sendJsonError(c, 403, "Forbidden"); return; }
+
+    char username[50] = "", name[50] = "", password[96] = "", roleStr[32] = "", workspaceId[37] = "", phone[20] = "";
+    mg_json_unescape(hm->body, "$.username", username, sizeof(username));
+    mg_json_unescape(hm->body, "$.name", name, sizeof(name));
+    mg_json_unescape(hm->body, "$.password", password, sizeof(password));
+    mg_json_unescape(hm->body, "$.role", roleStr, sizeof(roleStr));
+    mg_json_unescape(hm->body, "$.workspaceId", workspaceId, sizeof(workspaceId));
+    mg_json_unescape(hm->body, "$.phone", phone, sizeof(phone));
+
+    if (!username[0] || !name[0] || !password[0]) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"username, name and password are required\"}");
+        return;
+    }
+    UserRole role;
+    if (!parseRoleStr(roleStr, &role)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Invalid staff role\"}");
+        return;
+    }
+    if (!sw_password_meets_policy(password)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Password must be 8+ chars with letters and digits\"}");
+        return;
+    }
+    if (getUserByUsername(username, NULL)) {
+        sendJsonResponse(c, 409, "{\"success\":false,\"message\":\"Username already exists\"}");
+        return;
+    }
+    if (workspaceId[0] && !getWorkspace(workspaceId, NULL)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Workspace not found\"}");
+        return;
+    }
+
+    // Collision-safe id
+    int maxId = 0;
+    FILE *fp = fopen(USERS_FILE, "rb");
+    if (fp) {
+        User t;
+        while (fread(&t, sizeof(User), 1, fp) == 1) {
+            if (t.userId > maxId) maxId = t.userId;
+        }
+        fclose(fp);
+    }
+
+    User nu;
+    memset(&nu, 0, sizeof(nu));
+    nu.userId = maxId + 1;
+    snprintf(nu.username, sizeof(nu.username), "%s", username);
+    snprintf(nu.name, sizeof(nu.name), "%s", name);
+    snprintf(nu.password, sizeof(nu.password), "%s", password);
+    snprintf(nu.phone, sizeof(nu.phone), "%s", phone);
+    snprintf(nu.employmentStatus, sizeof(nu.employmentStatus), "ACTIVE");
+    nu.role = role;
+    nu.status = 1;
+    nu.requiresPasswordChange = 1;
+    snprintf(nu.workspaceId, sizeof(nu.workspaceId), "%s",
+             workspaceId[0] ? workspaceId : admin.workspaceId);
+
+    if (addUser(&nu)) {
+        appendAudit(admin.userId, "CREATE_STAFF", nu.workspaceId);
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"userId\":%d,\"message\":\"Staff account created\"}", nu.userId);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create user\"}");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -304,11 +906,10 @@ static void handleGetBins(struct mg_connection *c, struct mg_http_message *hm) {
     FILE *fp = fopen(BINS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    // Build JSON dynamically into a growable mg_str via mg_http_printf_chunk or just a buffer
-    char *buf = (char *)malloc(65536);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    buf[0] = '\0';
-    strcat(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     Bin b;
     while (fread(&b, sizeof(Bin), 1, fp) == 1) {
@@ -319,20 +920,20 @@ static void handleGetBins(struct mg_connection *c, struct mg_http_message *hm) {
         jsonStr(loc, sizeof(loc), b.location);
         jsonStr(wt, sizeof(wt), b.wasteType);
         char entry[512];
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(entry, sizeof(entry),
             "%s{\"binId\":%d,\"location\":\"%s\",\"capacity\":%.2f,"
             "\"currentLevel\":%.2f,\"fillPercent\":%.1f,"
             "\"wasteType\":\"%s\",\"status\":\"%s\"}",
             first ? "" : ",",
             b.binId, loc, b.capacity, b.currentLevel,
             fill, wt, binStatusToStr(b.status));
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
     fclose(fp);
-    strcat(buf, "]");
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -342,10 +943,10 @@ static void handleGetVehicles(struct mg_connection *c, struct mg_http_message *h
     FILE *fp = fopen(VEHICLES_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = (char *)malloc(16384);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    buf[0] = '\0';
-    strcat(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     Vehicle v;
     while (fread(&v, sizeof(Vehicle), 1, fp) == 1) {
@@ -356,18 +957,18 @@ static void handleGetVehicles(struct mg_connection *c, struct mg_http_message *h
         jsonStr(num, sizeof(num), v.vehicleNumber);
         jsonStr(drv, sizeof(drv), "Unassigned"); // driverName removed
         char entry[512];
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(entry, sizeof(entry),
             "%s{\"vehicleId\":%d,\"vehicleNumber\":\"%s\",\"driverName\":\"%s\","
             "\"capacity\":%.2f,\"currentLoad\":%.2f,\"loadPercent\":%.1f,\"status\":\"%s\"}",
             first ? "" : ",",
             v.vehicleId, num, drv, v.capacityKg, v.currentLoad, loadPct, vehicleStatusToStr(v.status));
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
     fclose(fp);
-    strcat(buf, "]");
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -377,10 +978,10 @@ static void handleGetCollections(struct mg_connection *c, struct mg_http_message
     FILE *fp = fopen(COLLECTIONS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = (char *)malloc(32768);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    buf[0] = '\0';
-    strcat(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     CollectionRequest req;
     while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
@@ -391,7 +992,7 @@ static void handleGetCollections(struct mg_connection *c, struct mg_http_message
         jsonStr(rd, sizeof(rd), req.createdAt);
         jsonStr(cd, sizeof(cd), req.completedAt);
         char entry[512];
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(entry, sizeof(entry),
             "%s{\"collectionId\":%d,\"binId\":%d,\"residentId\":%d,"
             "\"vehicleId\":%d,\"operatorId\":%d,\"quantity\":%.2f,"
             "\"priorityScore\":%d,\"priorityLevel\":\"%s\","
@@ -400,13 +1001,13 @@ static void handleGetCollections(struct mg_connection *c, struct mg_http_message
             req.collectionId, req.binId, req.residentId,
             req.vehicleId, 0 /* operatorId */, req.estimatedWeightKg,
             req.priorityScore, pl, collStatusToStr(req.status), rd, cd);
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
     fclose(fp);
-    strcat(buf, "]");
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -416,10 +1017,10 @@ static void handleGetResidents(struct mg_connection *c, struct mg_http_message *
     FILE *fp = fopen(RESIDENTS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = (char *)malloc(16384);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    buf[0] = '\0';
-    strcat(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     Resident r;
     while (fread(&r, sizeof(Resident), 1, fp) == 1) {
@@ -429,17 +1030,17 @@ static void handleGetResidents(struct mg_connection *c, struct mg_http_message *
         jsonStr(addr, sizeof(addr), r.address);
         jsonStr(area, sizeof(area), r.area);
         char entry[256];
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(entry, sizeof(entry),
             "%s{\"residentId\":%d,\"userId\":%d,\"address\":\"%s\",\"area\":\"%s\",\"ecoPoints\":%d}",
             first ? "" : ",",
             r.residentId, r.userId, addr, area, r.ecoPoints);
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
     fclose(fp);
-    strcat(buf, "]");
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -449,10 +1050,10 @@ static void handleGetWaste(struct mg_connection *c, struct mg_http_message *hm) 
     FILE *fp = fopen(WASTE_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = (char *)malloc(32768);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    buf[0] = '\0';
-    strcat(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     Waste w;
     while (fread(&w, sizeof(Waste), 1, fp) == 1) {
@@ -462,7 +1063,7 @@ static void handleGetWaste(struct mg_connection *c, struct mg_http_message *hm) 
         jsonStr(wt, sizeof(wt), w.wasteType);
         jsonStr(dt, sizeof(dt), w.date);
         char entry[256];
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(entry, sizeof(entry),
             "%s{\"wasteId\":%d,\"residentId\":%d,\"binId\":%d,"
             "\"wasteType\":\"%s\",\"quantity\":%.2f,\"date\":\"%s\","
             "\"recyclable\":%s,\"collected\":%s}",
@@ -471,13 +1072,13 @@ static void handleGetWaste(struct mg_connection *c, struct mg_http_message *hm) 
             wt, w.quantity, dt,
             w.recyclable ? "true" : "false",
             w.collected ? "true" : "false");
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
     fclose(fp);
-    strcat(buf, "]");
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -487,10 +1088,10 @@ static void handleGetAlerts(struct mg_connection *c, struct mg_http_message *hm)
     FILE *fp = fopen(ALERTS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = (char *)malloc(32768);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    buf[0] = '\0';
-    strcat(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     Alert a;
     while (fread(&a, sizeof(Alert), 1, fp) == 1) {
@@ -501,18 +1102,18 @@ static void handleGetAlerts(struct mg_connection *c, struct mg_http_message *hm)
         jsonStr(msg, sizeof(msg), a.message);
         jsonStr(dt, sizeof(dt), a.date);
         char entry[512];
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(entry, sizeof(entry),
             "%s{\"alertId\":%d,\"type\":\"%s\",\"referenceId\":%d,"
             "\"message\":\"%s\",\"date\":\"%s\",\"resolved\":%s}",
             first ? "" : ",",
             a.alertId, tp, a.referenceId, msg, dt, a.resolved ? "true" : "false");
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
     fclose(fp);
-    strcat(buf, "]");
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -522,17 +1123,17 @@ static void handleGetRecycling(struct mg_connection *c, struct mg_http_message *
     FILE *fp = fopen(RECYCLING_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = (char *)malloc(16384);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-    buf[0] = '\0';
-    strcat(buf, "[");
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     RecyclingRecord rr;
     while (fread(&rr, sizeof(RecyclingRecord), 1, fp) == 1) {
-char wt[64];
+        char wt[64];
         jsonStr(wt, sizeof(wt), rr.wasteType);
         char entry[256];
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(entry, sizeof(entry),
             "%s{\"recyclingId\":%d,\"collectionId\":%d,\"wasteType\":\"%s\","
             "\"recyclableQuantity\":%.2f,\"recycledQuantity\":%.2f,"
             "\"rejectedQuantity\":%.2f,\"value\":%.2f}",
@@ -540,13 +1141,13 @@ char wt[64];
             rr.recyclingId, rr.collectionId, wt,
             rr.recyclableQuantity, rr.recycledQuantity,
             rr.rejectedQuantity, rr.value);
-        strcat(buf, entry);
+        jbAppend(&jb, entry, (size_t)n);
         first = 0;
     }
     fclose(fp);
-    strcat(buf, "]");
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1011,27 +1612,22 @@ static void handleGetIncidentsPhase10(struct mg_connection *c, struct mg_http_me
     mg_http_get_var(&hm->query, "status", statusFilter, sizeof(statusFilter));
     mg_http_get_var(&hm->query, "severity", severityFilter, sizeof(severityFilter));
 
-    struct mg_str *rHeader = mg_http_get_header(hm, "X-User-Role");
-    if (rHeader && rHeader->len > 0) snprintf(roleBuf, sizeof(roleBuf), "%.*s", (int)rHeader->len, rHeader->buf);
-    else mg_http_get_var(&hm->query, "role", roleBuf, sizeof(roleBuf));
-
+    // Identity always comes from the authenticated session - never from
+    // client-controlled headers or query parameters.
     int requesterId = 0;
-    char idBuf[32] = "";
-    struct mg_str *idHeader = mg_http_get_header(hm, "X-User-Id");
-    if (idHeader && idHeader->len > 0) {
-        snprintf(idBuf, sizeof(idBuf), "%.*s", (int)idHeader->len, idHeader->buf);
-        requesterId = atoi(idBuf);
-    } else if (mg_http_get_var(&hm->query, "userId", idBuf, sizeof(idBuf)) > 0) {
-        requesterId = atoi(idBuf);
+    User viewer;
+    if (getAuthenticatedUser(hm, &viewer)) {
+        requesterId = viewer.userId;
+        snprintf(roleBuf, sizeof(roleBuf), "%s", roleToStr(viewer.role));
     }
 
     FILE *fp = fopen(INCIDENTS_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
 
-    char *buf = (char*)malloc(65536);
-    if (!buf) { fclose(fp); sendJsonResponse(c, 500, "{\"error\":\"OOM\"}"); return; }
-
-    int offset = snprintf(buf, 65536, "[");
+    JsonBuf jb;
+    jbInit(&jb, 8192);
+    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
     int first = 1;
     Incident inc;
 
@@ -1058,7 +1654,8 @@ static void handleGetIncidentsPhase10(struct mg_connection *c, struct mg_http_me
         jsonStr(arole, sizeof(arole), inc.assignedRole);
         jsonStr(etype, sizeof(etype), inc.entityType);
 
-        int written = snprintf(buf + offset, 65536 - offset,
+        char entry[2048];
+        int written = snprintf(entry, sizeof(entry),
             "%s{\"incidentId\":%d,\"type\":\"%s\",\"severity\":\"%s\",\"status\":\"%s\","
             "\"description\":\"%s\",\"collectionId\":%d,\"reportedBy\":%d,\"assignedTo\":%d,"
             "\"createdAt\":\"%s\",\"resolvedAt\":\"%s\",\"acknowledgedAt\":\"%s\",\"closedAt\":\"%s\","
@@ -1071,15 +1668,14 @@ static void handleGetIncidentsPhase10(struct mg_connection *c, struct mg_http_me
             etype, inc.entityId, inc.hubId, inc.vehicleId, inc.routeId,
             inc.facilityId, arole, inc.escalationLevel);
 
-        if (written < 0 || offset + written >= 65536) break;
-        offset += written;
+        if (written > 0) jbAppend(&jb, entry, (size_t)written);
         first = 0;
     }
     fclose(fp);
-    snprintf(buf + offset, 65536 - offset, "]");
+    jbPuts(&jb, "]");
 
-    sendJsonResponse(c, 200, buf);
-    free(buf);
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
 }
 
 static void handleGetIncidentDetail(struct mg_connection *c, struct mg_http_message *hm) {
@@ -1133,15 +1729,19 @@ static void handleCreateIncidentManual(struct mg_connection *c, struct mg_http_m
     mg_json_unescape(hm->body, "$.entityType", etype, sizeof(etype));
     mg_json_unescape(hm->body, "$.assignedRole", arole, sizeof(arole));
 
-    double eid = 0, hid = 0, vid = 0, rid = 0, fid = 0, rep = 1;
+    double eid = 0, hid = 0, vid = 0, rid = 0, fid = 0;
     mg_json_get_num(hm->body, "$.entityId", &eid);
     mg_json_get_num(hm->body, "$.hubId", &hid);
     mg_json_get_num(hm->body, "$.vehicleId", &vid);
     mg_json_get_num(hm->body, "$.routeId", &rid);
     mg_json_get_num(hm->body, "$.facilityId", &fid);
-    mg_json_get_num(hm->body, "$.reportedBy", &rep);
 
-    int id = createOperationalIncident(type, severity, etype, (int)eid, (int)hid, (int)vid, (int)rid, (int)fid, (int)rep, arole, desc);
+    // Reporter identity comes from the authenticated session.
+    User reporter;
+    int rep = 1;
+    if (getAuthenticatedUser(hm, &reporter)) rep = reporter.userId;
+
+    int id = createOperationalIncident(type, severity, etype, (int)eid, (int)hid, (int)vid, (int)rid, (int)fid, rep, arole, desc);
     if (id > 0) {
         char buf[128];
         snprintf(buf, sizeof(buf), "{\"success\":true,\"incidentId\":%d}", id);
@@ -1161,17 +1761,22 @@ static void handleIncidentActionWorkflow(struct mg_connection *c, struct mg_http
         return;
     }
 
+    // Actor identity always comes from the authenticated session; body-supplied
+    // actorId / actorRole are ignored to prevent audit forgery.
     int actorId = 1;
     char actorRole[32] = "ADMIN", note[256] = "", actTaken[128] = "", targetRole[32] = "";
     double assignTo = 0;
 
+    User actor;
+    if (getAuthenticatedUser(hm, &actor)) {
+        actorId = actor.userId;
+        snprintf(actorRole, sizeof(actorRole), "%s", roleToStr(actor.role));
+    }
+
     mg_json_unescape(hm->body, "$.note", note, sizeof(note));
     mg_json_unescape(hm->body, "$.actionTaken", actTaken, sizeof(actTaken));
-    mg_json_unescape(hm->body, "$.actorRole", actorRole, sizeof(actorRole));
     mg_json_unescape(hm->body, "$.targetRole", targetRole, sizeof(targetRole));
     mg_json_get_num(hm->body, "$.assignToUserId", &assignTo);
-    mg_json_get_num(hm->body, "$.actorId", &assignTo);
-    if (assignTo > 0) actorId = (int)assignTo;
 
     int res = 0;
     if (strcmp(actionType, "acknowledge") == 0) {
@@ -1979,7 +2584,271 @@ static void handleGetHubTransactions(struct mg_connection *c, struct mg_http_mes
     sendJsonResponse(c, 200, body);
 }
 
+// ─────────────────────────────────────────────────────────────
+// POST /api/hubs (create) and POST /api/hubs/update
+// ─────────────────────────────────────────────────────────────
+static void handleCreateHub(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
 
+    char name[100] = "", address[150] = "", serviceZone[50] = "";
+    mg_json_unescape(hm->body, "$.name", name, sizeof(name));
+    mg_json_unescape(hm->body, "$.address", address, sizeof(address));
+    mg_json_unescape(hm->body, "$.serviceZone", serviceZone, sizeof(serviceZone));
+
+    if (!name[0]) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Name is required\"}");
+        return;
+    }
+
+    LocalHub hub;
+    memset(&hub, 0, sizeof(hub));
+    snprintf(hub.name, sizeof(hub.name), "%s", name);
+    snprintf(hub.address, sizeof(hub.address), "%s", address);
+    snprintf(hub.serviceZone, sizeof(hub.serviceZone), "%s", serviceZone);
+    snprintf(hub.workspaceId, sizeof(hub.workspaceId), "%s", g_current_workspace);
+
+    double cap = 0, mgr = 0, lat = 0, lon = 0;
+    mg_json_get_num(hm->body, "$.maximumCapacityKg", &cap);
+    mg_json_get_num(hm->body, "$.managerId", &mgr);
+    mg_json_get_num(hm->body, "$.latitude", &lat);
+    mg_json_get_num(hm->body, "$.longitude", &lon);
+    if (cap > 0) hub.maximumCapacityKg = (float)cap; else hub.maximumCapacityKg = 10000.0f;
+    if (mgr > 0) hub.managerId = (int)mgr;
+    if (lat >= -90 && lat <= 90) hub.latitude = lat;
+    if (lon >= -180 && lon <= 180) hub.longitude = lon;
+
+    if (addHub(&hub)) {
+        appendAudit(u.userId, "CREATE_HUB", g_current_workspace);
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"hubId\":%d}", hub.hubId);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create hub\"}");
+    }
+}
+
+static void handleUpdateHub(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+
+    double hubId = 0;
+    mg_json_get_num(hm->body, "$.hubId", &hubId);
+    if (hubId <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"hubId is required\"}");
+        return;
+    }
+
+    LocalHub hub;
+    if (!getHubById((int)hubId, &hub)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Hub not found\"}");
+        return;
+    }
+
+    char name[100] = "", address[150] = "";
+    mg_json_unescape(hm->body, "$.name", name, sizeof(name));
+    mg_json_unescape(hm->body, "$.address", address, sizeof(address));
+    if (name[0]) snprintf(hub.name, sizeof(hub.name), "%s", name);
+    if (address[0]) snprintf(hub.address, sizeof(hub.address), "%s", address);
+
+    double cap = 0, mgr = 0;
+    mg_json_get_num(hm->body, "$.maximumCapacityKg", &cap);
+    mg_json_get_num(hm->body, "$.managerId", &mgr);
+    if (cap > 0) hub.maximumCapacityKg = (float)cap;
+    if (mgr > 0) hub.managerId = (int)mgr;
+
+    if (updateHub(&hub)) {
+        appendAudit(u.userId, "UPDATE_HUB", g_current_workspace);
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Hub updated\"}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update hub\"}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/hubs/cleaners and /api/hubs/dashboard
+// ─────────────────────────────────────────────────────────────
+static void handleGetHubCleaners(struct mg_connection *c, struct mg_http_message *hm) {
+    char hubStr[32] = "";
+    mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr));
+    int hubFilter = atoi(hubStr);
+
+    JsonBuf jb;
+    jbInit(&jb, 2048);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+
+    FILE *fp = fopen(USERS_FILE, "rb");
+    int first = 1;
+    if (fp) {
+        User t;
+        while (fread(&t, sizeof(User), 1, fp) == 1) {
+            if (t.role != ROLE_CLEANER) continue;
+            if (g_current_workspace[0] && strcmp(t.workspaceId, g_current_workspace) != 0) continue;
+            if (hubFilter > 0 && t.assignedHub != hubFilter) continue;
+            char entry[320];
+            int n = snprintf(entry, sizeof(entry),
+                "%s{\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"assignedHub\":%d}",
+                first ? "" : ",", t.userId, t.name, t.username, t.assignedHub);
+            jbAppend(&jb, entry, (size_t)n);
+            first = 0;
+        }
+        fclose(fp);
+    }
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void handleGetHubDashboard(struct mg_connection *c, struct mg_http_message *hm) {
+    char hubStr[32] = "";
+    mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr));
+    int hubId = atoi(hubStr);
+    if (hubId <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"hubId is required\"}");
+        return;
+    }
+
+    LocalHub hub;
+    float todayInbound = 0, todayOutbound = 0;
+    int activeCleaners = 0;
+    if (getHubById(hubId, &hub)) {
+        getHubPerformance(hubId, &todayInbound, &todayOutbound, &activeCleaners);
+        char buf[768];
+        snprintf(buf, sizeof(buf),
+            "{\"success\":true,\"hubId\":%d,\"name\":\"%s\",\"status\":\"%s\",\"currentLoadKg\":%.2f,\"maximumCapacityKg\":%.2f,\"todayInboundKg\":%.2f,\"todayOutboundKg\":%.2f,\"activeCleaners\":%d}",
+            hub.hubId, hub.name, hubStatusToStr(hub.status),
+            calculateHubCurrentLoad(hub.hubId), hub.maximumCapacityKg,
+            todayInbound, todayOutbound, activeCleaners);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Hub not found\"}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Data governance / observability APIs
+// ─────────────────────────────────────────────────────────────
+static void handleGetSystemHealth(struct mg_connection *c, struct mg_http_message *hm) {
+    SystemHealth h;
+    getSystemHealth(&h);
+    char buf[1024];
+    snprintf(buf, sizeof(buf),
+        "{\"success\":true,\"totalFiles\":%d,\"healthyFiles\":%d,\"corruptedFiles\":%d,\"missingFiles\":%d,"
+        "\"totalStorageBytes\":%ld,\"backupStorageBytes\":%ld,\"archiveStorageBytes\":%ld,"
+        "\"totalBackups\":%d,\"verifiedBackups\":%d,\"lastBackupAt\":\"%s\",\"lastIntegrityScanAt\":\"%s\",\"recoveryReady\":%s}",
+        h.totalFiles, h.healthyFiles, h.corruptedFiles, h.missingFiles,
+        h.totalStorageBytes, h.backupStorageBytes, h.archiveStorageBytes,
+        h.totalBackups, h.verifiedBackups, h.lastBackupAt, h.lastIntegrityScanAt,
+        h.recoveryReady ? "true" : "false");
+    sendJsonResponse(c, 200, buf);
+}
+
+static void handleGetSystemIntegrity(struct mg_connection *c, struct mg_http_message *hm) {
+    DataIntegrityResult results[64];
+    int count = verifyAllDataFiles(results, 64);
+
+    JsonBuf jb;
+    jbInit(&jb, 2048);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    for (int i = 0; i < count; i++) {
+        char entry[512];
+        int n = snprintf(entry, sizeof(entry),
+            "%s{\"fileName\":\"%s\",\"exists\":%s,\"readable\":%s,\"valid\":%s,\"fileSize\":%ld,\"recordCount\":%ld,\"invalidRecords\":%ld,\"checksum\":\"%s\",\"message\":\"%s\"}",
+            i ? "," : "", results[i].fileName,
+            results[i].exists ? "true" : "false",
+            results[i].readable ? "true" : "false",
+            results[i].valid ? "true" : "false",
+            results[i].fileSize, results[i].recordCount, results[i].invalidRecords,
+            results[i].checksum, results[i].message);
+        jbAppend(&jb, entry, (size_t)n);
+    }
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void handleScanSystemIntegrity(struct mg_connection *c, struct mg_http_message *hm) {
+    DataIntegrityResult results[64];
+    int count = verifyAllDataFiles(results, 64);
+    int ok = 0, bad = 0;
+    for (int i = 0; i < count; i++) {
+        if (results[i].valid && results[i].exists) ok++; else bad++;
+    }
+    char buf[256];
+    snprintf(buf, sizeof(buf), "{\"success\":true,\"files\":%d,\"healthy\":%d,\"issues\":%d}", count, ok, bad);
+    sendJsonResponse(c, 200, buf);
+}
+
+static void handleGetBackups(struct mg_connection *c, struct mg_http_message *hm) {
+    BackupMetadata backups[50];
+    int count = getBackups(g_current_workspace[0] ? g_current_workspace : "global", backups, 50);
+
+    JsonBuf jb;
+    jbInit(&jb, 2048);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    for (int i = 0; i < count; i++) {
+        char entry[512];
+        int n = snprintf(entry, sizeof(entry),
+            "%s{\"backupId\":\"%s\",\"createdAt\":\"%s\",\"createdBy\":\"%s\",\"fileCount\":%d,\"totalBytes\":%ld,\"status\":\"%s\"}",
+            i ? "," : "", backups[i].backupId, backups[i].createdAt,
+            backups[i].createdBy, backups[i].fileCount, backups[i].totalBytes, backups[i].status);
+        jbAppend(&jb, entry, (size_t)n);
+    }
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void handleCreateBackup(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+
+    char actorId[64];
+    snprintf(actorId, sizeof(actorId), "%d", u.userId);
+    BackupMetadata meta;
+    if (createBackup(actorId, g_current_workspace[0] ? g_current_workspace : "global", &meta)) {
+        appendAudit(u.userId, "CREATE_BACKUP", g_current_workspace);
+        char buf[512];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"backupId\":\"%s\",\"fileCount\":%d,\"totalBytes\":%ld}",
+                 meta.backupId, meta.fileCount, meta.totalBytes);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Backup failed\"}");
+    }
+}
+
+static void handleGetArchives(struct mg_connection *c, struct mg_http_message *hm) {
+    ArchiveMetadata archives[50];
+    int count = getArchives(g_current_workspace[0] ? g_current_workspace : "global", archives, 50);
+
+    JsonBuf jb;
+    jbInit(&jb, 2048);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    for (int i = 0; i < count; i++) {
+        char entry[512];
+        int n = snprintf(entry, sizeof(entry),
+            "%s{\"archiveId\":\"%s\",\"sourceFile\":\"%s\",\"createdAt\":\"%s\",\"recordCount\":%ld,\"totalBytes\":%ld,\"checksum\":\"%s\"}",
+            i ? "," : "", archives[i].archiveId, archives[i].sourceFile,
+            archives[i].createdAt, archives[i].recordCount, archives[i].totalBytes, archives[i].checksum);
+        jbAppend(&jb, entry, (size_t)n);
+    }
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void handleEvaluateRetention(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    char report[4096];
+    evaluateRetentionPolicies(report, sizeof(report));
+    sendJsonResponse(c, 200, report);
+}
 
 // ─────────────────────────────────────────────────────────────
 // STAGE C: PHASE 3 COLLECTION APIs
@@ -2086,47 +2955,77 @@ static void handleGetRecyclingBatches(struct mg_connection *c, struct mg_http_me
 // STAGE F: INCIDENTS / ROUTING / ANALYTICS
 // ─────────────────────────────────────────────────────────────
 
-static void handleGetAllIncidents(struct mg_connection *c, struct mg_http_message *hm) {
-    Incident list[100];
-    int count = getAllIncidents(list, 100);
-    char body[8192] = "{\"success\":true,\"incidents\":[";
-    for(int i = 0; i < count; i++) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "{\"id\":%d,\"status\":\"%s\",\"severity\":\"%s\"}", 
-            list[i].incidentId, list[i].status, list[i].severity);
-        strcat(body, buf);
-        if (i < count - 1) strcat(body, ",");
-    }
-    strcat(body, "]}");
-    sendJsonResponse(c, 200, body);
-}
-
 static void handlePostAction(struct mg_connection *c, struct mg_http_message *hm) {
     (void)hm; // suppress warning
-    sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Generic post action processed\"}");
+    // Unknown POST routes used to fake success (which hid missing backend
+    // implementations from the UI). Return a real 404 instead.
+    sendJsonResponse(c, 404, "{\"error\":\"Not found\"}");
 }
 
 char g_current_workspace[37] = {0};
 
+// Routes that are reachable without a session token. Everything else under
+// /api/ requires a valid Bearer session.
+static bool isPublicRoute(const char *uri) {
+    if (strcmp(uri, "/api/health") == 0) return true;
+    if (strcmp(uri, "/api/auth/login") == 0) return true;
+    if (strcmp(uri, "/api/auth/google") == 0) return true;
+    return false;
+}
 
+// Central role-based authorization for protected routes. Handlers kept working
+// as-is for roles that already used them; the matrix only REMOVES access that
+// previously leaked to unauthenticated callers.
+static bool routeAllowedForRole(UserRole role, bool isGet, const char *uri) {
+    bool staff = role == ROLE_ADMIN || role == ROLE_MUNICIPAL_ADMIN ||
+                 role == ROLE_LOCAL_HUB_MANAGER || role == ROLE_RECYCLING_MANAGER;
+    struct mg_str path = mg_str(uri);
+
+    if (mg_match(path, mg_str("/api/admin/*"), NULL)) return role == ROLE_ADMIN;
+
+    if (mg_match(path, mg_str("/api/workspaces"), NULL)) {
+        if (isGet) return role == ROLE_ADMIN || role == ROLE_MUNICIPAL_ADMIN;
+        return role == ROLE_ADMIN; // create workspaces: global admin only
+    }
+    if (mg_match(path, mg_str("/api/workspaces/current"), NULL)) return true;
+
+    if (mg_match(path, mg_str("/api/analytics/*"), NULL) ||
+        mg_match(path, mg_str("/api/reports/*"), NULL)) return staff;
+
+    if (mg_match(path, mg_str("/api/incidents"), NULL) ||
+        mg_match(path, mg_str("/api/incidents/*"), NULL)) {
+        // Read: all authenticated users (incident list handler also role-scopes
+        // for drivers/cleaners). Mutations: management roles only.
+        if (isGet) return true;
+        return staff;
+    }
+
+    if (mg_match(path, mg_str("/api/driver/*"), NULL))
+        return role == ROLE_DRIVER || role == ROLE_ADMIN || role == ROLE_MUNICIPAL_ADMIN;
+    if (mg_match(path, mg_str("/api/qr/*"), NULL))
+        return role == ROLE_CLEANER || role == ROLE_DRIVER || staff;
+    if (mg_match(path, mg_str("/api/demo/reset"), NULL)) return role == ROLE_ADMIN;
+    if (mg_match(path, mg_str("/api/residents/profile"), NULL)) return role == ROLE_RESIDENT;
+    if (mg_match(path, mg_str("/api/staff/profile"), NULL)) return staff;
+
+    // Hub mutations (create/update/arrivals): management roles only.
+    if (!isGet && mg_match(path, mg_str("/api/hubs"), NULL)) return staff;
+    if (!isGet && mg_match(path, mg_str("/api/hubs/*"), NULL)) return staff;
+
+    // Governance / observability: admins and municipal admins.
+    if (mg_match(path, mg_str("/api/system/*"), NULL) ||
+        mg_match(path, mg_str("/api/backups"), NULL) ||
+        mg_match(path, mg_str("/api/archives"), NULL))
+        return role == ROLE_ADMIN || role == ROLE_MUNICIPAL_ADMIN;
+
+    return true;
+}
 
 static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev != MG_EV_HTTP_MSG) return;
     struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
-    User user;
-    if (getAuthenticatedUser(hm, &user)) {
-        struct mg_str *wsHeader = mg_http_get_header(hm, "X-Workspace-Id");
-        if (wsHeader != NULL && wsHeader->len > 0 && user.role == ROLE_ADMIN) {
-            snprintf(g_current_workspace, sizeof(g_current_workspace), "%.*s", (int)wsHeader->len, wsHeader->buf);
-        } else {
-            strncpy(g_current_workspace, user.workspaceId, sizeof(g_current_workspace)-1);
-        }
-    } else {
-        g_current_workspace[0] = '\0';
-    }
-
-    // CORS preflight
+    // CORS preflight first (never requires auth)
     if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
         mg_http_reply(c, 204,
             "Access-Control-Allow-Origin: *\r\n"
@@ -2136,18 +3035,69 @@ static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
         return;
     }
 
+    // Request body size guard
+    if (hm->body.len > 262144) {
+        sendJsonError(c, 413, "Payload too large");
+        return;
+    }
+
+    char uri[256] = "";
+    snprintf(uri, sizeof(uri), "%.*s", (int)hm->uri.len, hm->uri.buf);
+
     bool isGet  = mg_match(hm->method, mg_str("GET"), NULL);
     bool isPost = mg_match(hm->method, mg_str("POST"), NULL);
+
+    // ── Central authentication + authorization gate ───────────
+    Session *session = NULL;
+    User gateUser;
+    if (!isPublicRoute(uri)) {
+        session = getSessionFromRequest(hm);
+        if (!session) { sendJsonError(c, 401, "Unauthorized"); return; }
+        if (!getUserById(session->userId, &gateUser)) {
+            sendJsonError(c, 401, "Unauthorized");
+            return;
+        }
+        if (gateUser.status == 0) {
+            sendJsonError(c, 403, "Account locked");
+            return;
+        }
+        if (!routeAllowedForRole(gateUser.role, isGet, uri)) {
+            sendJsonError(c, 403, "Forbidden");
+            return;
+        }
+        // Workspace scope always comes from the session, never from headers.
+        snprintf(g_current_workspace, sizeof(g_current_workspace), "%s", session->workspaceId);
+    } else {
+        g_current_workspace[0] = '\0';
+    }
 
     if      (mg_match(hm->uri, mg_str("/api/health"), NULL))                           sendJsonResponse(c, 200, "{\"status\":\"online\",\"server\":\"Smart City Waste Intelligence\"}");
     else if (isPost && mg_match(hm->uri, mg_str("/api/auth/login"), NULL))             handleLogin(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/auth/google"), NULL))            handleGoogleLogin(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/auth/logout"), NULL))            handleLogout(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/auth/me"), NULL))                handleAuthMe(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/auth/change_password"), NULL))   handleChangePassword(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/auth/workspace"), NULL))         handleSwitchWorkspace(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/residents/profile"), NULL))      handleCompleteResidentProfile(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/staff/profile"), NULL))          handleCompleteStaffProfile(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/admin/staff"), NULL))            handleCreateStaff(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces/current"), NULL))     handleGetCurrentWorkspace(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))             handleGetWorkspaces(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))             handlePostWorkspace(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs"), NULL))                   handleGetAllHubs(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/my-hub"), NULL))            handleGetMyHub(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/transactions"), NULL))      handleGetHubTransactions(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/hubs"), NULL))                   handleCreateHub(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/hubs/update"), NULL))            handleUpdateHub(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/cleaners"), NULL))          handleGetHubCleaners(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/hubs/dashboard"), NULL))         handleGetHubDashboard(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/system/health"), NULL))          handleGetSystemHealth(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/system/integrity"), NULL))       handleGetSystemIntegrity(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/system/integrity/scan"), NULL))  handleScanSystemIntegrity(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/system/retention/evaluate"), NULL)) handleEvaluateRetention(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/backups"), NULL))                handleGetBackups(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/backups"), NULL))                handleCreateBackup(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/archives"), NULL))               handleGetArchives(c, hm);
 else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/all"), NULL))        handleGetAllCollections(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/resident"), NULL))   handleCollectionResident(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/cleaner"), NULL))    handleCollectionCleaner(c, hm);
@@ -2155,7 +3105,6 @@ else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/all"), NULL))     
 else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))              handleGetAllTransfers(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/facilities"), NULL))   handleGetAllFacilities(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/batches"), NULL))      handleGetRecyclingBatches(c, hm);
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/incidents"), NULL))              handleGetAllIncidents(c, hm);
 
     else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/locations"), NULL)) {
         GeoLocation list[100];

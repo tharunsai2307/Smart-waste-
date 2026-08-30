@@ -14,3 +14,6 @@ temp_head.c
 frontend/node_modules/
 frontend/dist/
 frontend/.env
+
+# Test scratch data
+tests/.smoke/

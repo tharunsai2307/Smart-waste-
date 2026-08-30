@@ -1,5 +1,5 @@
 #include "data_integrity.h"
-#include "mongoose.h"
+#include "security.h"
 #include "types.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,30 +51,7 @@ int getDataFileRegistry(DataFileInfo *items, int maxItems) {
 }
 
 bool calculateFileSHA256(const char *filePath, char *checksumOut) {
-    FILE *fp = fopen(filePath, "rb");
-    if (!fp) {
-        strcpy(checksumOut, "");
-        return false;
-    }
-
-    mg_sha256_ctx ctx;
-    mg_sha256_init(&ctx);
-
-    unsigned char buffer[4096];
-    size_t bytesRead;
-    while ((bytesRead = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
-        mg_sha256_update(&ctx, buffer, bytesRead);
-    }
-    fclose(fp);
-
-    unsigned char digest[32];
-    mg_sha256_final(digest, &ctx);
-
-    for (int i = 0; i < 32; i++) {
-        sprintf(checksumOut + (i * 2), "%02x", digest[i]);
-    }
-    checksumOut[64] = '\0';
-    return true;
+    return sw_sha256_file(filePath, checksumOut);
 }
 
 void verifyDataFile(const char *fileName, DataIntegrityResult *result) {

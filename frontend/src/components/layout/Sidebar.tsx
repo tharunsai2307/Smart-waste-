@@ -7,6 +7,8 @@ import {
   Home, ClipboardCheck, TrendingUp, ShieldAlert, Building2, Database
 } from 'lucide-react';
 import { useAppStore } from '../../store';
+import { api } from '../../services/api';
+import { setActiveWorkspaceOverride } from '../../services/api';
 
 const ALL_NAV_ITEMS = [
   // Resident items
@@ -43,7 +45,13 @@ const Sidebar: React.FC = () => {
 
   const navItems = ALL_NAV_ITEMS.filter(item => !user || !item.roles || item.roles.includes(user.role));
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // Session may already be expired; local logout still applies.
+    }
+    setActiveWorkspaceOverride(null);
     logout();
     navigate('/login');
   };

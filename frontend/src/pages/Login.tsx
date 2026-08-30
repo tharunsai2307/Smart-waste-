@@ -31,6 +31,10 @@ const LoginPage: React.FC = () => {
       name: userParams.name,
       username: userParams.username,
       role: userParams.role as AuthUser['role'],
+      token: userParams.token,
+      workspaceId: userParams.workspaceId,
+      requiresPasswordChange: userParams.requiresPasswordChange,
+      profileComplete: userParams.profileComplete,
     });
   };
 
@@ -42,8 +46,8 @@ const LoginPage: React.FC = () => {
       const res = await api.login(username, password);
       if (res.success && res.role) {
         if (res.requiresPasswordChange) {
-          // Temporarily set user in store so api calls have token
-          useAppStore.setState({ user: { userId: res.userId!, name: res.name!, username: res.username!, role: res.role as AuthUser['role'] } });
+          // Temporarily set user in store so api calls include the session token
+          useAppStore.setState({ user: { userId: res.userId!, name: res.name!, username: res.username!, role: res.role as AuthUser['role'], token: res.token } });
           setStep('STAFF_PASSWORD');
           setStaffPwd({ ...staffPwd, oldPassword: password });
         } else {
@@ -69,7 +73,7 @@ const LoginPage: React.FC = () => {
       
       const res = await api.googleLogin(user.email || '', user.displayName || 'Google User');
       if (res.success) {
-        useAppStore.setState({ user: { userId: res.userId!, name: res.name!, username: res.username!, role: res.role as AuthUser['role'] } });
+        useAppStore.setState({ user: { userId: res.userId!, name: res.name!, username: res.username!, role: res.role as AuthUser['role'], token: res.token, workspaceId: res.workspaceId } });
         if (!res.profileComplete) {
           setStep('RESIDENT_PROFILE');
         } else {

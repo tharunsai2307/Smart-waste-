@@ -47,7 +47,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const switchWorkspace = (workspaceId: string) => {
+  const switchWorkspace = async (workspaceId: string) => {
+    try {
+      // The backend session owns the active workspace; the local override is
+      // only a hint and is cleared on the next reload.
+      await api.switchWorkspace(workspaceId);
+    } catch {
+      // Workspace switch not permitted for this role; ignore.
+    }
     setActiveWorkspaceOverride(workspaceId);
     fetchAll();
   };

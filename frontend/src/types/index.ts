@@ -161,6 +161,7 @@ export interface AuthUser {
   name: string;
   username: string;
   role: 'ADMIN' | 'MUNICIPAL_ADMIN' | 'LOCAL_HUB_MANAGER' | 'CLEANER' | 'DRIVER' | 'RECYCLING_MANAGER' | 'RESIDENT';
+  token?: string;
   requiresPasswordChange?: boolean;
   profileComplete?: boolean;
   assignedHub?: number;

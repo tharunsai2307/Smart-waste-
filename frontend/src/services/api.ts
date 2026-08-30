@@ -9,11 +9,11 @@ let activeWorkspaceOverride: string | null = null;
 export const setActiveWorkspaceOverride = (id: string | null) => { activeWorkspaceOverride = id; };
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const userId = useAppStore.getState().user?.userId;
+  const token = useAppStore.getState().user?.token;
   const workspaceId = activeWorkspaceOverride || useAppStore.getState().user?.workspaceId;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (userId) {
-    headers['Authorization'] = userId.toString();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
   if (workspaceId) {
     headers['X-Workspace-Id'] = workspaceId;
@@ -50,15 +50,19 @@ export const api = {
 
   // Auth
   login: (username: string, password: string) =>
-    fetchJSON<{ success: boolean; userId?: number; name?: string; username?: string; role?: string; message?: string; requiresPasswordChange?: boolean; profileComplete?: boolean }>(
+    fetchJSON<{ success: boolean; token?: string; userId?: number; name?: string; username?: string; role?: string; workspaceId?: string; message?: string; requiresPasswordChange?: boolean; profileComplete?: boolean }>(
       '/auth/login',
       { method: 'POST', body: JSON.stringify({ username, password }) }
     ),
   googleLogin: (email: string, name: string) =>
-    fetchJSON<{ success: boolean; userId?: number; name?: string; username?: string; role?: string; profileComplete?: boolean; message?: string }>(
+    fetchJSON<{ success: boolean; token?: string; userId?: number; name?: string; username?: string; role?: string; workspaceId?: string; profileComplete?: boolean; message?: string }>(
       '/auth/google',
       { method: 'POST', body: JSON.stringify({ email, name }) }
     ),
+  me: () => fetchJSON<{ success: boolean; userId?: number; name?: string; username?: string; role?: string; workspaceId?: string; requiresPasswordChange?: boolean; profileComplete?: boolean; message?: string }>('/auth/me'),
+  logout: () => fetchJSON<{ success: boolean; message?: string }>('/auth/logout', { method: 'POST' }),
+  switchWorkspace: (workspaceId: string) =>
+    fetchJSON<{ success: boolean; workspaceId?: string }>('/auth/workspace', { method: 'POST', body: JSON.stringify({ workspaceId }) }),
   completeResidentProfile: (data: any) =>
     fetchJSON<{ success: boolean; message?: string }>('/residents/profile', { method: 'POST', body: JSON.stringify(data) }),
   completeStaffProfile: (data: any) =>

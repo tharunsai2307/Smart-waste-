@@ -1,19 +1,14 @@
 #include "workspace.h"
 #include "config.h"
+#include "security.h"
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 #include <time.h>
 
 #define WORKSPACES_FILE "data/workspaces.dat"
 
 static void generateUuid(char *out) {
-    srand((unsigned int)time(NULL));
-    sprintf(out, "%04x%04x-%04x-%04x-%04x-%04x%04x%04x",
-            rand() % 0xffff, rand() % 0xffff, rand() % 0xffff,
-            rand() % 0x0fff | 0x4000,
-            rand() % 0x3fff | 0x8000,
-            rand() % 0xffff, rand() % 0xffff, rand() % 0xffff);
+    sw_uuid_v4(out);
 }
 
 void initWorkspaces() {
