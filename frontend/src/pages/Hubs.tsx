@@ -21,7 +21,6 @@ const HubsPage: React.FC = () => {
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
   const [showInboundModal, setShowInboundModal] = useState(false);
   const [showOutboundModal, setShowOutboundModal] = useState(false);
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
@@ -271,7 +270,7 @@ const HubsPage: React.FC = () => {
                   managerId: currentHub.managerId,
                 });
                 setActionError('');
-                setShowEditModal(true);
+                setShowCreateModal(true);
               }}
               className="flex items-center gap-2 px-3.5 py-2.5 rounded-lg text-xs font-medium bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-all cursor-pointer"
             >
@@ -789,7 +788,7 @@ const HubsPage: React.FC = () => {
                     className="w-full px-3 py-2.5 rounded-lg text-white font-mono bg-white/5 border border-white/10 focus:border-blue-500 focus:outline-none"
                   />
                   <div className="mt-1 text-[11px] text-slate-400 font-mono">
-                    Current Hub Stock: <strong>{(dashboardStats?.currentLoad ?? currentHub.currentLoadKg).toFixed(1)} kg</strong>
+                    Current Hub Stock: <strong>{(dashboardStats?.currentLoad ?? currentHub?.currentLoadKg ?? 0).toFixed(1)} kg</strong>
                   </div>
                 </div>
 

@@ -6,7 +6,6 @@ import {
   Scale,
   QrCode,
   CheckCircle2,
-  AlertTriangle,
   Clock,
   Play,
   Check,

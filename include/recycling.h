@@ -2,7 +2,6 @@
 #define RECYCLING_H
 
 #include "types.h"
-#include "config.h"
 
 // Function prototypes
 void initRecyclingData();

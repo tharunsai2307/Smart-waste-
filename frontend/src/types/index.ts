@@ -160,7 +160,7 @@ export interface AuthUser {
   userId: number;
   name: string;
   username: string;
-  role: 'ADMIN' | 'LOCAL_HUB_MANAGER' | 'CLEANER' | 'DRIVER' | 'RECYCLING_MANAGER' | 'RESIDENT';
+  role: 'ADMIN' | 'MUNICIPAL_ADMIN' | 'LOCAL_HUB_MANAGER' | 'CLEANER' | 'DRIVER' | 'RECYCLING_MANAGER' | 'RESIDENT';
   requiresPasswordChange?: boolean;
   profileComplete?: boolean;
   assignedHub?: number;
@@ -737,4 +737,58 @@ export interface NotificationPreference {
   vehicleAlerts: number;
   collectionExceptions: number;
   recyclingExceptions: number;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Phase 12: Enterprise Data Governance
+// ─────────────────────────────────────────────────────────────
+
+export interface SystemHealth {
+  totalFiles: number;
+  healthyFiles: number;
+  corruptedFiles: number;
+  missingFiles: number;
+  totalStorageBytes: number;
+  backupStorageBytes: number;
+  archiveStorageBytes: number;
+  totalBackups: number;
+  verifiedBackups: number;
+  lastBackupAt: string;
+  lastIntegrityScanAt: string;
+  recoveryReady: boolean;
+}
+
+export interface DataIntegrityResult {
+  fileName: string;
+  exists: boolean;
+  readable: boolean;
+  valid: boolean;
+  fileSize: number;
+  recordCount: number;
+  invalidRecords: number;
+  duplicateRecords: number;
+  checksum: string;
+  message: string;
+}
+
+export interface BackupMetadata {
+  backupId: string;
+  createdAt: string;
+  createdBy: string;
+  workspaceId: string;
+  fileCount: number;
+  totalBytes: number;
+  verified: boolean;
+  status: string;
+}
+
+export interface ArchiveMetadata {
+  archiveId: string;
+  workspaceId: string;
+  sourceFile: string;
+  archivePath: string;
+  createdAt: string;
+  recordCount: number;
+  totalBytes: number;
+  checksum: string;
 }

@@ -1,6 +1,6 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useState, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, Environment } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { Bin, Vehicle } from '../../types';
 
@@ -25,8 +25,7 @@ const Depot: React.FC<{ position: [number, number, number] }> = ({ position }) =
       <boxGeometry args={[3.2, 0.15, 2.2]} />
       <meshStandardMaterial color="#34d399" metalness={0.6} roughness={0.3} />
     </mesh>
-    {/* DEPOT sign glow */}
-    <pointLight position={[0, 2, 0]} intensity={1} color="#34d399" distance={5} />
+    <pointLight position={[0, 2, 0]} intensity={1.5} color="#34d399" distance={5} />
   </group>
 );
 
@@ -78,7 +77,7 @@ const SmartBin3D: React.FC<SmartBin3DProps> = ({ bin, position, onClick }) => {
       </mesh>
 
       {/* Status glow light */}
-      <pointLight position={[0, 1.5, 0]} intensity={bin.status !== 'NORMAL' ? 2 : 0.3}
+      <pointLight position={[0, 1.5, 0]} intensity={bin.status !== 'NORMAL' ? 2 : 0.4}
                   color={statusColor} distance={3} />
 
       {/* Hover tooltip base plate */}
@@ -184,9 +183,87 @@ const ROUTE_POINTS: THREE.Vector3[] = [
   new THREE.Vector3(-8, 0.2, 0),
 ];
 
-const CityScene: React.FC<CitySceneProps> = ({ bins, vehicles, onBinClick }) => {
-  const groundRef = useRef<THREE.Mesh>(null);
+// Interactive 2D Fallback Visualizer
+const Interactive2DCity: React.FC<CitySceneProps> = ({ bins, vehicles, onBinClick }) => {
+  return (
+    <div className="relative w-full h-full bg-slate-950 flex flex-col items-center justify-center p-4 select-none overflow-hidden">
+      {/* Grid Pattern */}
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(52,211,153,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(52,211,153,0.06)_1px,transparent_1px)] bg-[size:32px_32px]" />
+      
+      {/* City Center Radar Indicator */}
+      <div className="absolute w-72 h-72 rounded-full border border-emerald-500/10 animate-pulse pointer-events-none" />
+      <div className="absolute w-96 h-96 rounded-full border border-blue-500/10 pointer-events-none" />
 
+      <div className="relative z-10 w-full max-w-4xl h-full flex flex-col justify-between">
+        <div className="flex justify-between items-center text-xs font-mono text-slate-400 border-b border-slate-800/80 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            <span className="text-emerald-400 font-bold">SMART TELEMETRY GRID</span>
+          </div>
+          <div>{bins.length} Active Bins &bull; {vehicles.length} Fleet Vehicles</div>
+        </div>
+
+        {/* Interactive Bins Grid Map */}
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 my-auto py-2">
+          {bins.slice(0, 10).map((bin) => {
+            const isCritical = bin.status === 'CRITICAL' || bin.status === 'OVERFLOW';
+            const isWarning = bin.status === 'WARNING';
+            const badgeColor = isCritical ? 'border-red-500 bg-red-500/10 text-red-400' : isWarning ? 'border-amber-500 bg-amber-500/10 text-amber-400' : 'border-emerald-500 bg-emerald-500/10 text-emerald-400';
+
+            return (
+              <button
+                key={bin.binId}
+                onClick={() => onBinClick(bin)}
+                className={`p-3 rounded-xl border ${badgeColor} transition-all hover:scale-105 text-left flex flex-col justify-between bg-slate-900/80 backdrop-blur shadow-md`}
+              >
+                <div className="flex justify-between items-start mb-1">
+                  <span className="text-[11px] font-bold font-mono">#{bin.binId}</span>
+                  <span className="text-[10px] uppercase font-mono px-1 rounded bg-black/40">{bin.status}</span>
+                </div>
+                <div className="text-xs text-white font-medium truncate mb-2">{bin.location}</div>
+                <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${isCritical ? 'bg-red-500' : isWarning ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                    style={{ width: `${Math.min(bin.fillPercent, 100)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-[10px] text-slate-400 font-mono mt-1">
+                  <span>{bin.wasteType}</span>
+                  <span className="font-bold text-slate-200">{bin.fillPercent.toFixed(0)}%</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex justify-between items-center text-[11px] text-slate-500 font-mono pt-2 border-t border-slate-800/80">
+          <span>Click any smart bin node to inspect live load diagnostics</span>
+          <span className="text-emerald-400">STATUS: TELEMETRY ACTIVE</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CityScene: React.FC<CitySceneProps> = (props) => {
+  const [webGlAvailable, setWebGlAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      setWebGlAvailable(Boolean(gl));
+    } catch {
+      setWebGlAvailable(false);
+    }
+  }, []);
+
+  if (webGlAvailable === false) {
+    return <Interactive2DCity {...props} />;
+  }
+
+  const { bins, vehicles, onBinClick } = props;
+  const groundRef = useRef<THREE.Mesh>(null);
   const displayedBins = useMemo(() => bins.slice(0, 15), [bins]);
   const activeVehicle = useMemo(() => vehicles.find(v => v.status === 'ON_ROUTE' || v.status === 'ASSIGNED') ?? vehicles[0], [vehicles]);
 
@@ -194,11 +271,18 @@ const CityScene: React.FC<CitySceneProps> = ({ bins, vehicles, onBinClick }) => 
     <Canvas
       shadows
       camera={{ position: [12, 10, 12], fov: 50 }}
-      style={{ background: 'transparent' }}
+      style={{ background: '#020810' }}
+      onCreated={({ gl }) => {
+        gl.domElement.addEventListener('webglcontextlost', (e) => {
+          e.preventDefault();
+          setWebGlAvailable(false);
+        }, false);
+      }}
     >
-      <ambientLight intensity={0.15} color="#1a2a4a" />
-      <directionalLight position={[10, 15, 10]} intensity={0.4} castShadow color="#e2e8f0" />
-      <pointLight position={[0, 8, 0]} intensity={0.5} color="#0d2a3a" />
+      <ambientLight intensity={0.4} color="#94a3b8" />
+      <directionalLight position={[10, 15, 10]} intensity={0.8} castShadow color="#f8fafc" />
+      <pointLight position={[0, 8, 0]} intensity={0.6} color="#38bdf8" />
+      <hemisphereLight args={['#38bdf8', '#0f172a', 0.5]} />
 
       {/* Ground grid */}
       <mesh ref={groundRef} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
@@ -250,7 +334,6 @@ const CityScene: React.FC<CitySceneProps> = ({ bins, vehicles, onBinClick }) => 
         autoRotate
         autoRotateSpeed={0.3}
       />
-      <Environment preset="night" />
     </Canvas>
   );
 };

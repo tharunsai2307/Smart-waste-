@@ -13,6 +13,8 @@
 #include "geospatial.h"
 #include "route_engine.h"
 #include "alert_engine.h"
+#include "external_services.h"
+#include "observability.h"
 #include <stdio.h>
 
 int main(void) {
@@ -32,6 +34,8 @@ int main(void) {
     initGisRoutesData();
     initRouteEngineData();
     initAlertEngine();
+    initExternalServices();
+    initObservability();
 
     startServer("8080");
     return 0;

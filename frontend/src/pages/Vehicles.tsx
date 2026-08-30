@@ -1,4 +1,3 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { api } from '../services/api';
@@ -27,7 +26,9 @@ const VehiclesPage: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {vehicles.map((v, i) => {
           const color = vehicleStatusColors[v.status] ?? '#475569';
-          const loadPct = Math.min(v.loadPercent, 100);
+          const cap = v.capacityKg ?? v.capacity ?? 1;
+          const calculatedLoad = v.loadPercent ?? (cap > 0 ? (v.currentLoad / cap) * 100 : 0);
+          const loadPct = Math.min(calculatedLoad, 100);
           return (
             <motion.div
               key={v.vehicleId}
@@ -40,7 +41,7 @@ const VehiclesPage: React.FC = () => {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <div className="text-lg font-bold text-white font-mono">{v.vehicleNumber}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">{v.driverName}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{v.vehicleType || v.vehicleCode || 'Fleet Asset'}</div>
                 </div>
                 <span className="px-2 py-1 rounded-lg text-xs font-mono border"
                       style={{ color, background: `${color}15`, borderColor: `${color}30` }}>
@@ -68,7 +69,7 @@ const VehiclesPage: React.FC = () => {
               <div className="grid grid-cols-2 gap-2 mt-4">
                 {[
                   { label: 'Current', value: `${v.currentLoad.toFixed(0)} kg` },
-                  { label: 'Capacity', value: `${v.capacity.toFixed(0)} kg` },
+                  { label: 'Capacity', value: `${cap.toFixed(0)} kg` },
                 ].map(r => (
                   <div key={r.label}>
                     <div className="text-xs text-slate-600">{r.label}</div>

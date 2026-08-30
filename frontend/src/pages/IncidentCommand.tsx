@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../services/api';
@@ -32,12 +32,19 @@ export default function IncidentCommand() {
   const [newComment, setNewComment] = useState('');
   const [actionNote, setActionNote] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    title: '',
+    incidentType: 'SAFETY_HAZARD',
+    severity: 'MEDIUM',
+    description: '',
+    location: '',
+  });
 
   // Polling interval (default 10s)
   const [pollInterval, setPollInterval] = useState<number>(10000);
 
   // Queries
-  const { data: incidents = [], isLoading } = useQuery<Incident[]>({
+  const { data: incidents = [] } = useQuery<Incident[]>({
     queryKey: ['incidents', severityFilter],
     queryFn: () => api.getIncidents(severityFilter !== 'ALL' ? { severity: severityFilter } : {}),
     refetchInterval: pollInterval > 0 ? pollInterval : false,
@@ -105,6 +112,15 @@ export default function IncidentCommand() {
     onSuccess: () => {
       setNewComment('');
       queryClient.invalidateQueries({ queryKey: ['incidentTimeline'] });
+    },
+  });
+
+  const createIncidentMutation = useMutation({
+    mutationFn: (data: Partial<Incident>) => api.createIncident(data),
+    onSuccess: () => {
+      invalidate();
+      setShowCreateModal(false);
+      setCreateForm({ title: '', incidentType: 'SAFETY_HAZARD', severity: 'MEDIUM', description: '', location: '' });
     },
   });
 
@@ -445,6 +461,123 @@ export default function IncidentCommand() {
                   </div>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Report New Incident */}
+      <AnimatePresence>
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative w-full max-w-lg p-6 rounded-2xl glass border border-slate-700 bg-slate-900"
+            >
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-base font-bold text-white">Report New Incident</h3>
+                <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-white">✕</button>
+              </div>
+
+              <form
+                onSubmit={e => {
+                  e.preventDefault();
+                  createIncidentMutation.mutate({
+                    type: createForm.incidentType,
+                    severity: createForm.severity,
+                    description: createForm.description,
+                    reportedBy: user?.userId || 1,
+                  });
+                }}
+                className="space-y-4 text-xs"
+              >
+                <div>
+                  <label className="block text-slate-400 mb-1">INCIDENT TITLE</label>
+                  <input
+                    type="text"
+                    required
+                    value={createForm.title}
+                    onChange={e => setCreateForm({ ...createForm, title: e.target.value })}
+                    placeholder="e.g. Broken hydraulic lift on Truck #04"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-400 mb-1">TYPE</label>
+                    <select
+                      value={createForm.incidentType}
+                      onChange={e => setCreateForm({ ...createForm, incidentType: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white"
+                    >
+                      <option value="MISSED_COLLECTION">Missed Collection</option>
+                      <option value="WEIGHT_VARIANCE">Weight Variance</option>
+                      <option value="VEHICLE_BREAKDOWN">Vehicle Breakdown</option>
+                      <option value="SAFETY_HAZARD">Safety Hazard</option>
+                      <option value="CAPACITY_OVERFLOW">Capacity Overflow</option>
+                      <option value="QR_SCAN_FAILURE">QR Scan Failure</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1">SEVERITY</label>
+                    <select
+                      value={createForm.severity}
+                      onChange={e => setCreateForm({ ...createForm, severity: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white"
+                    >
+                      <option value="CRITICAL">Critical</option>
+                      <option value="HIGH">High</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="LOW">Low</option>
+                      <option value="INFO">Info</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1">LOCATION / ASSET</label>
+                  <input
+                    type="text"
+                    value={createForm.location}
+                    onChange={e => setCreateForm({ ...createForm, location: e.target.value })}
+                    placeholder="e.g. Sector 7 Collection Hub"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1">DESCRIPTION</label>
+                  <textarea
+                    rows={3}
+                    required
+                    value={createForm.description}
+                    onChange={e => setCreateForm({ ...createForm, description: e.target.value })}
+                    placeholder="Describe the incident, immediate impact, and conditions observed..."
+                    className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateModal(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={createIncidentMutation.isPending}
+                    className="px-5 py-2 rounded-xl font-semibold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50"
+                  >
+                    {createIncidentMutation.isPending ? 'Submitting...' : 'Submit Incident'}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

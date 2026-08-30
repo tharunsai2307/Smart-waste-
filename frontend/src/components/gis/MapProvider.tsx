@@ -1,5 +1,3 @@
-import React from 'react';
-
 // Fallback map representation that visually positions locations without an actual map library
 const FallbackMap = ({ locations }: { locations: any[] }) => {
   return (

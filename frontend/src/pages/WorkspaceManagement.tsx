@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { useWorkspace } from '../contexts/WorkspaceContext';
 import { api } from '../services/api';
 import { useAppStore } from '../store';
-import { Building2, Plus, Edit, Trash2 } from 'lucide-react';
+import { Building2, Plus, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function WorkspaceManagement() {
@@ -11,8 +11,6 @@ export default function WorkspaceManagement() {
   const user = useAppStore((s) => s.user);
   const [showCreate, setShowCreate] = useState(false);
   const [formData, setFormData] = useState({ name: '', description: '' });
-
-  const qc = useQueryClient();
 
   const createMutation = useMutation({
     mutationFn: api.createWorkspace,

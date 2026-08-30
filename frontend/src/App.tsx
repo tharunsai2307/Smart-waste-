@@ -27,6 +27,7 @@ import DriverDashboard from './pages/DriverDashboard';
 import Transfers from './pages/Transfers';
 import VehicleManagement from './pages/VehicleManagement';
 import WorkspaceManagement from './pages/WorkspaceManagement';
+import { DataGovernance } from './pages/DataGovernance';
 import { GISCommand } from './pages/GISCommand';
 
 const queryClient = new QueryClient({
@@ -76,6 +77,7 @@ function AppContent() {
                 <Route index element={<RoleDefaultRedirect />} />
                 <Route path="executive-command" element={<ExecutiveCommand />} />
                 <Route path="workspaces" element={<WorkspaceManagement />} />
+                <Route path="governance" element={<DataGovernance />} />
                 <Route path="incident-command"  element={<IncidentCommand />} />
                 <Route path="incidents"         element={<IncidentCommand />} />
                 <Route path="dashboard"        element={<Dashboard />} />

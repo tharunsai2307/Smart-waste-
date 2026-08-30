@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '../store';
@@ -8,12 +8,10 @@ import type {
   CollectionAnalytics,
   HubAnalyticsItem,
   FleetAnalytics,
-  RouteAnalytics,
   RecyclingAnalytics,
   WasteTypeAnalyticsItem,
   DriverPerformanceItem,
   CleanerPerformanceItem,
-  FacilityAnalyticsItem,
   IncidentAnalytics,
   QRAnalytics,
   OperationalTrendItem,
@@ -52,11 +50,6 @@ export default function ExecutiveCommand() {
     queryFn: () => api.getAnalyticsFleet(filterParams),
   });
 
-  const { data: routeData } = useQuery<RouteAnalytics>({
-    queryKey: ['analyticsRoutes', timeFilter, user?.role, user?.userId],
-    queryFn: () => api.getAnalyticsRoutes(filterParams),
-  });
-
   const { data: recData } = useQuery<RecyclingAnalytics>({
     queryKey: ['analyticsRecycling', timeFilter, user?.role, user?.userId],
     queryFn: () => api.getAnalyticsRecycling(filterParams),
@@ -77,12 +70,6 @@ export default function ExecutiveCommand() {
     queryKey: ['analyticsCleaners', timeFilter],
     queryFn: () => api.getAnalyticsCleaners(filterParams),
     enabled: user?.role === 'ADMIN' || user?.role === 'LOCAL_HUB_MANAGER' || user?.role === 'CLEANER',
-  });
-
-  const { data: facilities } = useQuery<FacilityAnalyticsItem[]>({
-    queryKey: ['analyticsFacilities', timeFilter],
-    queryFn: () => api.getAnalyticsFacilities(filterParams),
-    enabled: user?.role === 'ADMIN' || user?.role === 'RECYCLING_MANAGER',
   });
 
   const { data: incidents } = useQuery<IncidentAnalytics>({

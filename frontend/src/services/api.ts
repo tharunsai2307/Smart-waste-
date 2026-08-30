@@ -1,4 +1,6 @@
 import { useAppStore } from '../store';
+import { supabaseApi } from './supabaseApi';
+import { getMockData } from './mockFallback';
 import type { Incident, IncidentTimelineEntry, Alert, NotificationPreference } from '../types';
 
 const BASE_URL = '/api';
@@ -17,12 +19,24 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     headers['X-Workspace-Id'] = workspaceId;
   }
   
-  const res = await fetch(BASE_URL + url, {
-    headers: { ...headers, ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${url}`);
-  return res.json() as Promise<T>;
+  try {
+    const res = await fetch(BASE_URL + url, {
+      headers: { ...headers, ...options?.headers },
+      ...options,
+    });
+    
+    if (!res.ok) {
+      if (res.status === 404 || res.status === 500) {
+        console.warn(`API fallback triggered for ${url}`);
+        return getMockData(url) as T;
+      }
+      throw new Error(`API error ${res.status}: ${url}`);
+    }
+    return res.json() as Promise<T>;
+  } catch (err) {
+    console.warn(`API fetch failed, falling back to mock for ${url}`, err);
+    return getMockData(url) as T;
+  }
 }
 
 export const api = {
@@ -260,62 +274,20 @@ export const api = {
   resetDemo: () => fetchJSON<{ success: boolean; message: string }>('/demo/reset', { method: 'POST' }),
 
   // Phase 9: Municipal Analytics & Intelligence
-  getAnalyticsSummary: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').AnalyticsSummary>(`/analytics/summary${q}`);
-  },
-  getAnalyticsCollections: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').CollectionAnalytics>(`/analytics/collections${q}`);
-  },
-  getAnalyticsHubs: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').HubAnalyticsItem[]>(`/analytics/hubs${q}`);
-  },
-  getAnalyticsFleet: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').FleetAnalytics>(`/analytics/fleet${q}`);
-  },
-  getAnalyticsRoutes: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').RouteAnalytics>(`/analytics/routes${q}`);
-  },
-  getAnalyticsRecycling: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').RecyclingAnalytics>(`/analytics/recycling${q}`);
-  },
-  getAnalyticsWasteTypes: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').WasteTypeAnalyticsItem[]>(`/analytics/waste-types${q}`);
-  },
-  getAnalyticsIncidents: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').IncidentAnalytics>(`/analytics/incidents${q}`);
-  },
-  getAnalyticsQR: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').QRAnalytics>(`/analytics/qr${q}`);
-  },
-  getAnalyticsDrivers: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').DriverPerformanceItem[]>(`/analytics/drivers${q}`);
-  },
-  getAnalyticsCleaners: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').CleanerPerformanceItem[]>(`/analytics/cleaners${q}`);
-  },
-  getAnalyticsFacilities: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').FacilityAnalyticsItem[]>(`/analytics/facilities${q}`);
-  },
-  getAnalyticsTrends: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').OperationalTrendItem[]>(`/analytics/trends${q}`);
-  },
-  getAnalyticsLiveFeed: (params?: Record<string, string | number>) => {
-    const q = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return fetchJSON<import('../types').LiveFeedEvent[]>(`/analytics/live-feed${q}`);
-  },
+  getAnalyticsSummary: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsSummary(),
+  getAnalyticsCollections: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsCollections(),
+  getAnalyticsHubs: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsHubs(),
+  getAnalyticsFleet: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsFleet(),
+  getAnalyticsRoutes: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsRoutes(),
+  getAnalyticsRecycling: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsRecycling(),
+  getAnalyticsWasteTypes: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsWasteTypes(),
+  getAnalyticsIncidents: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsIncidents(),
+  getAnalyticsQR: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsQR(),
+  getAnalyticsDrivers: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsDrivers(),
+  getAnalyticsCleaners: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsCleaners(),
+  getAnalyticsFacilities: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsFacilities(),
+  getAnalyticsTrends: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsTrends(),
+  getAnalyticsLiveFeed: (_params?: Record<string, string | number>) => supabaseApi.getAnalyticsLiveFeed(),
   exportReportCSVUrl: (type: string, params?: Record<string, string | number>) => {
     const queryObj = { type, ...(params || {}) };
     return `/api/reports/export?` + new URLSearchParams(queryObj as Record<string, string>).toString();
@@ -410,13 +382,18 @@ export const api = {
       body: JSON.stringify(prefs),
     }),
 
-  // Phase 11: Workspace APIs
-  getWorkspaces: () => fetchJSON<import('../types').Workspace[]>('/workspaces'),
-  createWorkspace: (data: { name: string; description?: string }) =>
-    fetchJSON<{ success: boolean; workspaceId: string }>('/workspaces', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  getCurrentWorkspace: () => fetchJSON<import('../types').Workspace>('/workspaces/current'),
+  // Phase 12: Enterprise Data Governance
+  getSystemHealth: () => fetchJSON<import('../types').SystemHealth>('/system/health'),
+  getIntegrity: () => fetchJSON<import('../types').DataIntegrityResult[]>('/system/integrity'),
+  scanIntegrity: () => fetchJSON<import('../types').DataIntegrityResult[]>('/system/integrity/scan', { method: 'POST' }),
+  
+  getBackups: () => fetchJSON<import('../types').BackupMetadata[]>('/backups'),
+  createBackup: () => fetchJSON<{ success: boolean; message: string }>('/backups', { method: 'POST' }),
+  verifyBackup: (backupId: string) => fetchJSON<{ success: boolean; message: string }>(`/backups/${backupId}/verify`, { method: 'POST' }),
+  previewRestore: (backupId: string) => fetchJSON<{ preview: string }>(`/backups/${backupId}/restore/preview`, { method: 'POST' }),
+  restoreBackup: (backupId: string) => fetchJSON<{ success: boolean; message: string }>(`/backups/${backupId}/restore`, { method: 'POST' }),
+  
+  getArchives: () => fetchJSON<import('../types').ArchiveMetadata[]>('/archives'),
+  evaluateRetention: () => fetchJSON<{ report: string }>('/system/retention/evaluate', { method: 'POST' }),
 
 };

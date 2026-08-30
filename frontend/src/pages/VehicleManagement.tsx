@@ -13,7 +13,6 @@ import {
   History
 } from 'lucide-react';
 import { api } from '../services/api';
-import type { Vehicle } from '../types';
 import { useAppStore } from '../store';
 
 const vehicleTypeIcons: Record<string, any> = {

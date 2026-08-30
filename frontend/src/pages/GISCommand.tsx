@@ -1,11 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { api } from '../services/api';
+import { useEffect, useState } from 'react';
 import { MapProvider } from '../components/gis/MapProvider';
 
 export const GISCommand = () => {
   const [locations, setLocations] = useState<any[]>([]);
-  const [hubs, setHubs] = useState<any[]>([]);
-  const [routes, setRoutes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -23,12 +20,6 @@ export const GISCommand = () => {
         { locationId: 3, type: 3, referenceId: 301, lat: 40.7528, lon: -74.0260 }
       ];
       setLocations(mockLocations);
-      
-      const mockHubs = [
-        { hubId: 101, name: "Downtown Central Hub", distanceKm: 2.4 }
-      ];
-      setHubs(mockHubs);
-
       setLoading(false);
     } catch (e) {
       console.error(e);

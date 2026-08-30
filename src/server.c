@@ -257,6 +257,46 @@ static void handleLogin(struct mg_connection *c, struct mg_http_message *hm) {
     }
 }
 
+static void handleGoogleLogin(struct mg_connection *c, struct mg_http_message *hm) {
+    char email[128] = "", name[128] = "";
+    mg_json_unescape(hm->body, "$.email", email, sizeof(email));
+    mg_json_unescape(hm->body, "$.name", name, sizeof(name));
+    
+    User u;
+    int found = 0;
+    FILE *fp = fopen("data/users.dat", "rb");
+    if (fp) {
+        while (fread(&u, sizeof(User), 1, fp) == 1) {
+            if (strcmp(u.username, email) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        fclose(fp);
+    }
+    
+    if (!found) {
+        memset(&u, 0, sizeof(User));
+        u.userId = (int)time(NULL) % 100000; // Generate a random ID
+        strncpy(u.username, email, sizeof(u.username) - 1);
+        strncpy(u.name, name, sizeof(u.name) - 1);
+        hashPassword("google_oauth_dummy", u.password);
+        u.role = ROLE_RESIDENT;
+        strncpy(u.workspaceId, "DEFAULT_WORKSPACE", sizeof(u.workspaceId) - 1);
+        
+        if (!addUser(&u)) {
+            sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create user\"}");
+            return;
+        }
+    }
+    
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "{\"success\":true,\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"role\":\"%s\",\"workspaceId\":\"%s\",\"profileComplete\":%s}",
+        u.userId, u.name, u.username, roleToStr(u.role), u.workspaceId, found ? "true" : "false");
+    sendJsonResponse(c, 200, buf);
+}
+
 // ─────────────────────────────────────────────────────────────
 // GET /api/bins
 // ─────────────────────────────────────────────────────────────
@@ -2101,6 +2141,7 @@ static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
 
     if      (mg_match(hm->uri, mg_str("/api/health"), NULL))                           sendJsonResponse(c, 200, "{\"status\":\"online\",\"server\":\"Smart City Waste Intelligence\"}");
     else if (isPost && mg_match(hm->uri, mg_str("/api/auth/login"), NULL))             handleLogin(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/auth/google"), NULL))            handleGoogleLogin(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces/current"), NULL))     handleGetCurrentWorkspace(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))             handleGetWorkspaces(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/workspaces"), NULL))             handlePostWorkspace(c, hm);

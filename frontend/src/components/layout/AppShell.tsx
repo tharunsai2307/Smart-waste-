@@ -2,6 +2,7 @@ import React from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 const AppShell: React.FC = () => {
   return (
@@ -10,7 +11,9 @@ const AppShell: React.FC = () => {
       <div className="flex flex-col flex-1 min-w-0">
         <Topbar />
         <main className="flex-1 overflow-auto p-6">
-          <Outlet />
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
     </div>

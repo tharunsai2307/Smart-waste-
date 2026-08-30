@@ -124,7 +124,7 @@ const ProcessingBatches: React.FC = () => {
                   <span className="text-red-400">Residual: {selectedBatch.residualWeightKg} kg</span>
                 </div>
               </div>
-              {selectedBatch.status !== 5 && ( // 5 is BATCH_COMPLETED
+              {selectedBatch.status !== 'COMPLETED' && (
                 <button 
                   onClick={() => completeBatchMut.mutate(selectedBatch.batchId)}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md text-sm font-medium"
@@ -134,8 +134,17 @@ const ProcessingBatches: React.FC = () => {
               )}
             </div>
 
-            {selectedBatch.status !== 5 ? (
+            {selectedBatch.status !== 'COMPLETED' ? (
               <div className="grid grid-cols-2 gap-6">
+                {/* Classify */}
+                <div className="p-4 border border-slate-700/50 rounded-xl bg-slate-900/50 col-span-2">
+                  <h4 className="text-sm font-semibold text-slate-300 mb-3">Record Waste Classification</h4>
+                  <div className="flex gap-2">
+                    <input type="text" placeholder="Waste Type (e.g. Plastic PET)" className="flex-1 bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-white" value={classify.wasteType} onChange={e => setClassify({...classify, wasteType: e.target.value})} />
+                    <input type="number" placeholder="Weight Kg" className="w-1/3 bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-white" value={classify.weightKg} onChange={e => setClassify({...classify, weightKg: e.target.value})} />
+                    <button onClick={() => classifyMut.mutate()} className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-md font-medium">CLASSIFY</button>
+                  </div>
+                </div>
                 
                 {/* Process */}
                 <div className="p-4 border border-slate-700/50 rounded-xl bg-slate-900/50">

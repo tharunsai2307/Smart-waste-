@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../services/api';
 import { useAppStore } from '../store';
 import KPICard from '../components/cards/KPICard';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import type { Bin } from '../types';
 
 // Lazy-load the 3D scene to avoid SSR issues
@@ -83,13 +84,15 @@ const Dashboard: React.FC = () => {
       <div className="glass rounded-2xl overflow-hidden" style={{ height: is3DMode ? '400px' : '200px' }}>
         {is3DMode ? (
           <div style={{ height: '400px', position: 'relative' }}>
-            <Suspense fallback={
-              <div className="flex items-center justify-center h-full">
-                <span className="text-emerald-400 text-xs font-mono tracking-widest">LOADING 3D SCENE...</span>
-              </div>
-            }>
-              <CityScene bins={bins} vehicles={vehicles} onBinClick={setSelectedBin} />
-            </Suspense>
+            <ErrorBoundary>
+              <Suspense fallback={
+                <div className="flex items-center justify-center h-full">
+                  <span className="text-emerald-400 text-xs font-mono tracking-widest">LOADING 3D SCENE...</span>
+                </div>
+              }>
+                <CityScene bins={bins} vehicles={vehicles} onBinClick={setSelectedBin} />
+              </Suspense>
+            </ErrorBoundary>
             <div className="absolute top-4 left-4 text-xs text-slate-500 font-mono">
               3D SMART CITY VIEW — Click bins to inspect
             </div>

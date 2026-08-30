@@ -11,6 +11,36 @@ void initUsersData() {
     } else {
         fclose(fp);
     }
+
+    // Ensure master admin exists
+    User admin;
+    int exists = 0;
+    fp = fopen(USERS_FILE, "rb");
+    if (fp) {
+        User temp;
+        while (fread(&temp, sizeof(User), 1, fp) == 1) {
+            if (strcmp(temp.username, "admin") == 0) {
+                exists = 1;
+                break;
+            }
+        }
+        fclose(fp);
+    }
+    
+    if (!exists) {
+        memset(&admin, 0, sizeof(User));
+        admin.userId = 1;
+        strncpy(admin.username, "admin", sizeof(admin.username)-1);
+        strncpy(admin.name, "Master Admin", sizeof(admin.name)-1);
+        admin.role = ROLE_ADMIN;
+        admin.status = 1;
+        admin.failedAttempts = 0;
+        admin.requiresPasswordChange = 1;
+        strncpy(admin.password, "admin123", sizeof(admin.password)-1);
+        
+        addUser(&admin);
+        printf("Master admin created.\n");
+    }
 }
 
 #include <stdint.h>
