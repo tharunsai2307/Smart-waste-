@@ -90,7 +90,10 @@ int isValidTransferTransition(TransferStatus from, TransferStatus to) {
         case TRANSFER_DRIVER_CHECKED_IN: return to == TRANSFER_LOADING;
         case TRANSFER_LOADING:           return to == TRANSFER_LOADED;
         case TRANSFER_LOADED:            return to == TRANSFER_DEPARTED;
-        case TRANSFER_DEPARTED:          return to == TRANSFER_EN_ROUTE;
+        // Departure implies en-route: allow both the explicit EN_ROUTE
+        // transition and a direct DEPARTED -> ARRIVED (the UI has no separate
+        // "en-route" step; it calls depart then arrive).
+        case TRANSFER_DEPARTED:          return to == TRANSFER_EN_ROUTE || to == TRANSFER_ARRIVED;
         case TRANSFER_EN_ROUTE:          return to == TRANSFER_ARRIVED;
         case TRANSFER_DELAYED:           return to == TRANSFER_EN_ROUTE || to == TRANSFER_ARRIVED;
         case TRANSFER_ARRIVED:           return to == TRANSFER_UNLOADING;

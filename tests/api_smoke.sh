@@ -161,6 +161,23 @@ check "POST /api/backups -> 200" 200 "$(status_of -X POST "$BASE/api/backups" -H
 echo "== Unknown POST no longer fakes success =="
 check "unknown POST -> 404" 404 "$(status_of -X POST "$BASE/api/does-not-exist" -H "Authorization: Bearer $TOKEN3" -H 'Content-Type: application/json' -d '{}')"
 
+echo "== Admin portal P0: real list shapes (arrays, no fake envelopes) =="
+HUBS=$(curl -s -H "Authorization: Bearer $TOKEN3" "$BASE/api/hubs")
+check_contains "GET /api/hubs returns bare array" "[" "$(printf '%s' "$HUBS" | head -c 1)"
+FACS=$(curl -s -H "Authorization: Bearer $TOKEN3" "$BASE/api/facilities")
+check_contains "GET /api/facilities returns bare array" "[" "$(printf '%s' "$FACS" | head -c 1)"
+DRVS=$(curl -s -H "Authorization: Bearer $TOKEN3" "$BASE/api/drivers")
+check_contains "GET /api/drivers returns bare array" "[" "$(printf '%s' "$DRVS" | head -c 1)"
+TRFS=$(curl -s -H "Authorization: Bearer $TOKEN3" "$BASE/api/transfers")
+check_contains "GET /api/transfers returns bare array" "[" "$(printf '%s' "$TRFS" | head -c 1)"
+BATS=$(curl -s -H "Authorization: Bearer $TOKEN3" "$BASE/api/recycling/batches")
+check_contains "GET /api/recycling/batches has batches key" '"batches"' "$BATS"
+
+echo "== Admin portal P0: real transfer create (domain validation) =="
+CREATE=$(curl -s -X POST "$BASE/api/transfers" -H "Authorization: Bearer $TOKEN3" -H 'Content-Type: application/json' \
+  -d '{"destinationFacilityId":1,"destinationType":"RECYCLING_HUB","wasteType":"Organic","plannedWeightKg":100,"priority":"NORMAL","scheduledDate":"2026-08-31","scheduledTime":"10:00","sourceHubId":1}')
+check_contains "POST /api/transfers creates transfer" '"transferId"' "$CREATE"
+
 echo ""
 echo "==================================="
 echo "RESULT: $PASS passed, $FAIL failed"

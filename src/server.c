@@ -32,10 +32,13 @@
 #include "alert.h"
 #include "recycling.h"
 #include "route.h"
+#include "routing_provider.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <time.h>
 #include "security.h"
 extern char g_current_workspace[37];
@@ -390,6 +393,22 @@ static void authClearFailures(const char *ip, const char *username) {
 // ─────────────────────────────────────────────────────────────
 // GET /api/workspaces
 // ─────────────────────────────────────────────────────────────
+// Forward declarations for the P0 portal-recovery handlers (defined later).
+static void sendHubList(struct mg_connection *c);
+static void sendTransferList(struct mg_connection *c, WasteTransfer *arr, int n);
+static void sendFacilityList(struct mg_connection *c);
+static void sendVehicleList(struct mg_connection *c, Vehicle *arr, int n);
+static void sendCollectionList(struct mg_connection *c, CollectionRequest *arr, int n);
+static void sendBatchList(struct mg_connection *c);
+static void sendHubTransactionList(struct mg_connection *c, HubInventoryTransaction *arr, int n);
+static void hubJsonEntry(JsonBuf *jb, int *first, const LocalHub *h);
+static int getWorkspaceCollections(CollectionRequest *out, int max);
+static void handleCollectionDispatch(struct mg_connection *c, struct mg_http_message *hm);
+static void handleProcessNextCollection(struct mg_connection *c, struct mg_http_message *hm);
+static void handleGisNearby(struct mg_connection *c, struct mg_http_message *hm);
+static void handleGisRoutes(struct mg_connection *c, struct mg_http_message *hm);
+static void handleGisPost(struct mg_connection *c, struct mg_http_message *hm);
+
 static void handleGetWorkspaces(struct mg_connection *c, struct mg_http_message *hm) {
     User u;
     if (!getAuthenticatedUser(hm, &u)) {
@@ -940,74 +959,29 @@ static void handleGetBins(struct mg_connection *c, struct mg_http_message *hm) {
 // GET /api/vehicles
 // ─────────────────────────────────────────────────────────────
 static void handleGetVehicles(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
     FILE *fp = fopen(VEHICLES_FILE, "rb");
     if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
-
-    JsonBuf jb;
-    jbInit(&jb, 4096);
-    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
-    jbPuts(&jb, "[");
-    int first = 1;
+    Vehicle list[100];
+    int count = 0;
     Vehicle v;
-    while (fread(&v, sizeof(Vehicle), 1, fp) == 1) {
+    while (count < 100 && fread(&v, sizeof(Vehicle), 1, fp) == 1) {
         // Workspace Isolation
         if (g_current_workspace[0] != '\0' && strcmp(v.workspaceId, g_current_workspace) != 0) continue;
-        float loadPct = v.capacityKg > 0 ? (v.currentLoad / v.capacityKg) * 100.0f : 0;
-        char num[32], drv[64];
-        jsonStr(num, sizeof(num), v.vehicleNumber);
-        jsonStr(drv, sizeof(drv), "Unassigned"); // driverName removed
-        char entry[512];
-        int n = snprintf(entry, sizeof(entry),
-            "%s{\"vehicleId\":%d,\"vehicleNumber\":\"%s\",\"driverName\":\"%s\","
-            "\"capacity\":%.2f,\"currentLoad\":%.2f,\"loadPercent\":%.1f,\"status\":\"%s\"}",
-            first ? "" : ",",
-            v.vehicleId, num, drv, v.capacityKg, v.currentLoad, loadPct, vehicleStatusToStr(v.status));
-        jbAppend(&jb, entry, (size_t)n);
-        first = 0;
+        list[count++] = v;
     }
     fclose(fp);
-    jbPuts(&jb, "]");
-    sendJsonResponse(c, 200, jb.data);
-    jbFree(&jb);
+    sendVehicleList(c, list, count);
 }
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/collections
 // ─────────────────────────────────────────────────────────────
 static void handleGetCollections(struct mg_connection *c, struct mg_http_message *hm) {
-    FILE *fp = fopen(COLLECTIONS_FILE, "rb");
-    if (!fp) { sendJsonResponse(c, 200, "[]"); return; }
-
-    JsonBuf jb;
-    jbInit(&jb, 4096);
-    if (!jb.data) { fclose(fp); sendJsonError(c, 500, "OOM"); return; }
-    jbPuts(&jb, "[");
-    int first = 1;
-    CollectionRequest req;
-    while (fread(&req, sizeof(CollectionRequest), 1, fp) == 1) {
-        // Workspace Isolation
-        if (g_current_workspace[0] != '\0' && strcmp(req.workspaceId, g_current_workspace) != 0) continue;
-        char pl[32], rd[24], cd[24];
-        jsonStr(pl, sizeof(pl), req.priorityLevel);
-        jsonStr(rd, sizeof(rd), req.createdAt);
-        jsonStr(cd, sizeof(cd), req.completedAt);
-        char entry[512];
-        int n = snprintf(entry, sizeof(entry),
-            "%s{\"collectionId\":%d,\"binId\":%d,\"residentId\":%d,"
-            "\"vehicleId\":%d,\"operatorId\":%d,\"quantity\":%.2f,"
-            "\"priorityScore\":%d,\"priorityLevel\":\"%s\","
-            "\"status\":\"%s\",\"requestDate\":\"%s\",\"completionDate\":\"%s\"}",
-            first ? "" : ",",
-            req.collectionId, req.binId, req.residentId,
-            req.vehicleId, 0 /* operatorId */, req.estimatedWeightKg,
-            req.priorityScore, pl, collStatusToStr(req.status), rd, cd);
-        jbAppend(&jb, entry, (size_t)n);
-        first = 0;
-    }
-    fclose(fp);
-    jbPuts(&jb, "]");
-    sendJsonResponse(c, 200, jb.data);
-    jbFree(&jb);
+    (void)hm;
+    CollectionRequest list[100];
+    int count = getWorkspaceCollections(list, 100);
+    sendCollectionList(c, list, count);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1344,8 +1318,7 @@ static void handleAddWaste(struct mg_connection *c, struct mg_http_message *hm) 
 // POST /api/collections/process
 // ─────────────────────────────────────────────────────────────
 static void handleProcessCollection(struct mg_connection *c, struct mg_http_message *hm) {
-    // processNextCollection();
-    sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Highest priority collection processed\"}");
+    handleProcessNextCollection(c, hm);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2522,39 +2495,34 @@ static void handleGetLocations(struct mg_connection *c, struct mg_http_message *
 // ─────────────────────────────────────────────────────────────
 
 static void handleGetAllHubs(struct mg_connection *c, struct mg_http_message *hm) {
-    LocalHub hubs[50];
-    int count = getAllHubs(hubs, 50);
-    
-    char body[8192] = "{\"success\":true,\"hubs\":[";
-    for(int i = 0; i < count; i++) {
-        char buf[256];
-        float currentLoad = calculateHubCurrentLoad(hubs[i].hubId);
-        snprintf(buf, sizeof(buf),
-            "{\"hubId\":%d,\"name\":\"%s\",\"address\":\"%s\",\"managerId\":%d,\"currentLoadKg\":%.2f,\"maximumCapacityKg\":%.2f,\"status\":\"%s\"}",
-            hubs[i].hubId, hubs[i].name, hubs[i].address, hubs[i].managerId, 
-            currentLoad, hubs[i].maximumCapacityKg, hubStatusToStr(hubs[i].status));
-        strcat(body, buf);
-        if (i < count - 1) strcat(body, ",");
-    }
-    strcat(body, "]}");
-    sendJsonResponse(c, 200, body);
+    (void)hm;
+    sendHubList(c);
 }
 
 static void handleGetMyHub(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
     char mgrStr[32];
-    if (mg_http_get_var(&hm->query, "managerId", mgrStr, sizeof(mgrStr)) <= 0) {
-        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Missing managerId\"}");
+    int managerId = 0;
+    if (mg_http_get_var(&hm->query, "managerId", mgrStr, sizeof(mgrStr)) > 0) {
+        managerId = atoi(mgrStr);
+    }
+    // Session identity is authoritative; query param is only a fallback for
+    // admins who explicitly request another manager's hub.
+    if (managerId <= 0 || u.role == ROLE_ADMIN || u.role == ROLE_MUNICIPAL_ADMIN) {
+        if (managerId <= 0) managerId = u.userId;
+    } else if (managerId != u.userId && u.role != ROLE_ADMIN && u.role != ROLE_MUNICIPAL_ADMIN) {
+        sendJsonResponse(c, 403, "{\"success\":false,\"message\":\"Forbidden\"}");
         return;
     }
-    int managerId = atoi(mgrStr);
     LocalHub hub;
     if (getHubByManagerId(managerId, &hub) == 1) {
-        char buf[512];
-        float currentLoad = calculateHubCurrentLoad(hub.hubId);
-        snprintf(buf, sizeof(buf),
-            "{\"success\":true,\"hub\":{\"hubId\":%d,\"name\":\"%s\",\"status\":\"%s\",\"currentLoadKg\":%.2f,\"maximumCapacityKg\":%.2f}}",
-            hub.hubId, hub.name, hubStatusToStr(hub.status), currentLoad, hub.maximumCapacityKg);
-        sendJsonResponse(c, 200, buf);
+        JsonBuf jb;
+        jbInit(&jb, 1024);
+        int first = 1;
+        hubJsonEntry(&jb, &first, &hub);
+        sendJsonResponse(c, 200, jb.data ? jb.data : "{}");
+        jbFree(&jb);
     } else {
         sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Hub not found for manager\"}");
     }
@@ -2562,26 +2530,26 @@ static void handleGetMyHub(struct mg_connection *c, struct mg_http_message *hm) 
 
 static void handleGetHubTransactions(struct mg_connection *c, struct mg_http_message *hm) {
     char hubStr[32];
-    if (mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr)) <= 0) {
-        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Missing hubId\"}");
-        return;
+    int hubId = 0;
+    if (mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr)) > 0) {
+        hubId = atoi(hubStr);
     }
-    int hubId = atoi(hubStr);
-    
-    HubInventoryTransaction trans[50];
-    int count = getHubTransactions(hubId, trans, 50);
-    
-    char body[8192] = "{\"success\":true,\"transactions\":[";
-    for(int i = 0; i < count; i++) {
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-            "{\"transactionId\":%d,\"quantityKg\":%.2f,\"timestamp\":\"%s\"}",
-            trans[i].transactionId, trans[i].quantityKg, trans[i].timestamp);
-        strcat(body, buf);
-        if (i < count - 1) strcat(body, ",");
+    if (hubId <= 0) {
+        // Fall back to the session user's hub (hub managers/cleaners), then to
+        // the first hub so the UI never gets a bare 400 for missing params.
+        User u;
+        if (getAuthenticatedUser(hm, &u) && u.assignedHub > 0) {
+            hubId = u.assignedHub;
+        } else {
+            LocalHub hubs[50];
+            int n = getAllHubs(hubs, 50);
+            hubId = n > 0 ? hubs[0].hubId : 0;
+        }
     }
-    strcat(body, "]}");
-    sendJsonResponse(c, 200, body);
+
+    HubInventoryTransaction trans[100];
+    int count = getHubTransactions(hubId, trans, 100);
+    sendHubTransactionList(c, trans, count);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2686,10 +2654,12 @@ static void handleGetHubCleaners(struct mg_connection *c, struct mg_http_message
             if (t.role != ROLE_CLEANER) continue;
             if (g_current_workspace[0] && strcmp(t.workspaceId, g_current_workspace) != 0) continue;
             if (hubFilter > 0 && t.assignedHub != hubFilter) continue;
-            char entry[320];
+            char entry[420];
             int n = snprintf(entry, sizeof(entry),
-                "%s{\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"assignedHub\":%d}",
-                first ? "" : ",", t.userId, t.name, t.username, t.assignedHub);
+                "%s{\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"phone\":\"%s\","
+                "\"email\":\"%s\",\"assignedHub\":%d,\"employmentStatus\":\"%s\",\"status\":%d}",
+                first ? "" : ",", t.userId, t.name, t.username, t.phone, t.email,
+                t.assignedHub, t.employmentStatus, t.status);
             jbAppend(&jb, entry, (size_t)n);
             first = 0;
         }
@@ -2701,29 +2671,57 @@ static void handleGetHubCleaners(struct mg_connection *c, struct mg_http_message
 }
 
 static void handleGetHubDashboard(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
     char hubStr[32] = "";
     mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr));
     int hubId = atoi(hubStr);
+    if (hubId <= 0) hubId = u.assignedHub;
     if (hubId <= 0) {
-        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"hubId is required\"}");
-        return;
+        LocalHub hubs[50];
+        int n = getAllHubs(hubs, 50);
+        hubId = n > 0 ? hubs[0].hubId : 0;
     }
 
     LocalHub hub;
     float todayInbound = 0, todayOutbound = 0;
     int activeCleaners = 0;
-    if (getHubById(hubId, &hub)) {
-        getHubPerformance(hubId, &todayInbound, &todayOutbound, &activeCleaners);
-        char buf[768];
-        snprintf(buf, sizeof(buf),
-            "{\"success\":true,\"hubId\":%d,\"name\":\"%s\",\"status\":\"%s\",\"currentLoadKg\":%.2f,\"maximumCapacityKg\":%.2f,\"todayInboundKg\":%.2f,\"todayOutboundKg\":%.2f,\"activeCleaners\":%d}",
-            hub.hubId, hub.name, hubStatusToStr(hub.status),
-            calculateHubCurrentLoad(hub.hubId), hub.maximumCapacityKg,
-            todayInbound, todayOutbound, activeCleaners);
-        sendJsonResponse(c, 200, buf);
-    } else {
+    if (hubId <= 0 || !getHubById(hubId, &hub)) {
         sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Hub not found\"}");
+        return;
     }
+    getHubPerformance(hubId, &todayInbound, &todayOutbound, &activeCleaners);
+    CollectionRequest collections[100];
+    int collCount = getCollectionsByHubId(hubId, collections, 100);
+    int pendingCollections = 0;
+    for (int i = 0; i < collCount; i++) {
+        if (collections[i].status != COLLECTION_COMPLETED &&
+            collections[i].status != COLLECTION_CANCELLED &&
+            collections[i].status != COLLECTION_MISSED) pendingCollections++;
+    }
+    WasteTransfer transfers[100];
+    int trCount = getTransfersByHub(hubId, transfers, 100);
+    int pendingTransfers = 0;
+    for (int i = 0; i < trCount; i++) {
+        if (transfers[i].status != TRANSFER_COMPLETED && transfers[i].status != TRANSFER_CANCELLED) pendingTransfers++;
+    }
+    float load = calculateHubCurrentLoad(hubId);
+    char nm[128];
+    jsonStr(nm, sizeof(nm), hub.name);
+    char buf[900];
+    snprintf(buf, sizeof(buf),
+        "{\"hubId\":%d,\"hubCode\":\"%s\",\"name\":\"%s\",\"currentCapacity\":%.2f,"
+        "\"currentLoad\":%.2f,\"availableCapacity\":%.2f,\"utilizationPercent\":%.2f,"
+        "\"warningThresholdPercent\":%.2f,\"criticalThresholdPercent\":%.2f,"
+        "\"inboundToday\":%.2f,\"outboundToday\":%.2f,\"activeCleaners\":%d,"
+        "\"pendingCollections\":%d,\"pendingTransferRequests\":%d,\"status\":\"%s\"}",
+        hub.hubId, hub.hubCode, nm, hub.maximumCapacityKg, load,
+        hub.maximumCapacityKg - load,
+        hub.maximumCapacityKg > 0 ? (load / hub.maximumCapacityKg) * 100.0f : 0.0f,
+        hub.warningThresholdPercent, hub.criticalThresholdPercent,
+        todayInbound, todayOutbound, activeCleaners,
+        pendingCollections, pendingTransfers, hubStatusToStr(hub.status));
+    sendJsonResponse(c, 200, buf);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2855,45 +2853,46 @@ static void handleEvaluateRetention(struct mg_connection *c, struct mg_http_mess
 // ─────────────────────────────────────────────────────────────
 
 static void handleGetAllCollections(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
     CollectionRequest list[100];
-    int count = getAllCollectionRequests(list, 100);
-    char body[8192] = "{\"success\":true,\"collections\":[";
-    for(int i = 0; i < count; i++) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "{\"id\":%d,\"status\":\"%s\",\"estimatedWeightKg\":%.2f}", 
-            list[i].collectionId, collectionStatusToStr(list[i].status), list[i].estimatedWeightKg);
-        strcat(body, buf);
-        if (i < count - 1) strcat(body, ",");
-    }
-    strcat(body, "]}");
-    sendJsonResponse(c, 200, body);
+    int count = getWorkspaceCollections(list, 100);
+    sendCollectionList(c, list, count);
 }
 
 static void handleCollectionResident(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
     char resStr[32];
-    if (mg_http_get_var(&hm->query, "residentId", resStr, sizeof(resStr)) <= 0) {
-        sendJsonResponse(c, 400, "{\"success\":false}"); return;
+    int residentId = 0;
+    if (mg_http_get_var(&hm->query, "residentId", resStr, sizeof(resStr)) > 0) {
+        residentId = atoi(resStr);
     }
-    CollectionRequest list[50];
-    int count = getCollectionsByResidentId(atoi(resStr), list, 50);
-    (void)count; // suppress warning
-    sendJsonResponse(c, 200, "{\"success\":true}");
+    // Session identity is authoritative for residents.
+    if (residentId <= 0 && u.role == ROLE_RESIDENT) {
+        Resident r;
+        if (getResidentByUserId(u.userId, &r)) residentId = r.residentId;
+    }
+    CollectionRequest list[100];
+    int count = residentId > 0 ? getCollectionsByResidentId(residentId, list, 100) : 0;
+    sendCollectionList(c, list, count);
 }
 
 static void handleCollectionCleaner(struct mg_connection *c, struct mg_http_message *hm) {
-    char resStr[32];
-    if (mg_http_get_var(&hm->query, "cleanerId", resStr, sizeof(resStr)) <= 0) {
-        sendJsonResponse(c, 400, "{\"success\":false}"); return;
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    char clStr[32];
+    int cleanerId = 0;
+    if (mg_http_get_var(&hm->query, "cleanerId", clStr, sizeof(clStr)) > 0) {
+        cleanerId = atoi(clStr);
     }
-    CollectionRequest list[50];
-    int count = getCollectionsByCleanerId(atoi(resStr), list, 50);
-    (void)count; // suppress warning
-    sendJsonResponse(c, 200, "{\"success\":true}");
+    if (cleanerId <= 0 && u.role == ROLE_CLEANER) cleanerId = u.userId;
+    CollectionRequest list[100];
+    int count = cleanerId > 0 ? getCollectionsByCleanerId(cleanerId, list, 100) : 0;
+    sendCollectionList(c, list, count);
 }
 
 static void handleCollectionAction(struct mg_connection *c, struct mg_http_message *hm) {
-    (void)hm; // suppress warning
-    sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Action processed\"}");
+    handleCollectionDispatch(c, hm);
 }
 
 
@@ -2903,18 +2902,10 @@ static void handleCollectionAction(struct mg_connection *c, struct mg_http_messa
 // ─────────────────────────────────────────────────────────────
 
 static void handleGetAllTransfers(struct mg_connection *c, struct mg_http_message *hm) {
-    WasteTransfer list[100];
-    int count = getAllTransfers(list, 100);
-    char body[8192] = "{\"success\":true,\"transfers\":[";
-    for(int i = 0; i < count; i++) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "{\"id\":%d,\"plannedWeightKg\":%.2f}", 
-            list[i].transferId, list[i].plannedWeightKg);
-        strcat(body, buf);
-        if (i < count - 1) strcat(body, ",");
-    }
-    strcat(body, "]}");
-    sendJsonResponse(c, 200, body);
+    (void)hm;
+    WasteTransfer list[200];
+    int count = getAllTransfers(list, 200);
+    sendTransferList(c, list, count);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2922,33 +2913,13 @@ static void handleGetAllTransfers(struct mg_connection *c, struct mg_http_messag
 // ─────────────────────────────────────────────────────────────
 
 static void handleGetAllFacilities(struct mg_connection *c, struct mg_http_message *hm) {
-    TransportFacility list[50];
-    int count = getAllFacilities(list, 50);
-    char body[8192] = "{\"success\":true,\"facilities\":[";
-    for(int i = 0; i < count; i++) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "{\"id\":%d,\"status\":\"%s\",\"maxCapacityKg\":%.2f}", 
-            list[i].facilityId, list[i].status, list[i].maximumDailyCapacityKg);
-        strcat(body, buf);
-        if (i < count - 1) strcat(body, ",");
-    }
-    strcat(body, "]}");
-    sendJsonResponse(c, 200, body);
+    (void)hm;
+    sendFacilityList(c);
 }
 
 static void handleGetRecyclingBatches(struct mg_connection *c, struct mg_http_message *hm) {
-    RecyclingBatch list[100];
-    int count = getAllBatches(list, 100);
-    char body[8192] = "{\"success\":true,\"batches\":[";
-    for(int i = 0; i < count; i++) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "{\"id\":%d,\"inputWeightKg\":%.2f}", 
-            list[i].batchId, list[i].inputWeightKg);
-        strcat(body, buf);
-        if (i < count - 1) strcat(body, ",");
-    }
-    strcat(body, "]}");
-    sendJsonResponse(c, 200, body);
+    (void)hm;
+    sendBatchList(c);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2962,7 +2933,1535 @@ static void handlePostAction(struct mg_connection *c, struct mg_http_message *hm
     sendJsonResponse(c, 404, "{\"error\":\"Not found\"}");
 }
 
+// ─────────────────────────────────────────────────────────────
+// P0 ADMIN PORTAL RECOVERY: real serializers + list handlers.
+// These replace the stub/partial JSON that previously made the
+// admin portal show empty or broken pages.
+// ─────────────────────────────────────────────────────────────
+static const char* batchStatusName(BatchStatus s) {
+    switch (s) {
+        case BATCH_CREATED: return "CREATED";
+        case BATCH_RECEIVED: return "RECEIVED";
+        case BATCH_CLASSIFYING: return "CLASSIFYING";
+        case BATCH_CLASSIFIED: return "CLASSIFIED";
+        case BATCH_PROCESSING: return "PROCESSING";
+        case BATCH_PROCESSED: return "PROCESSED";
+        case BATCH_RECOVERED: return "RECOVERED";
+        case BATCH_COMPLETED: return "COMPLETED";
+        case BATCH_QUARANTINED: return "QUARANTINED";
+        case BATCH_REJECTED: return "REJECTED";
+        case BATCH_CANCELLED: return "CANCELLED";
+        default: return "UNKNOWN";
+    }
+}
+
+static CollectionStatus collectionStatusFromStr(const char *s) {
+    if (!s) return COLLECTION_REQUESTED;
+    if (strcasecmp(s, "UNDER_REVIEW") == 0) return COLLECTION_UNDER_REVIEW;
+    if (strcasecmp(s, "ASSIGNED") == 0) return COLLECTION_ASSIGNED;
+    if (strcasecmp(s, "EN_ROUTE") == 0) return COLLECTION_EN_ROUTE;
+    if (strcasecmp(s, "ARRIVED") == 0) return COLLECTION_ARRIVED;
+    if (strcasecmp(s, "COLLECTING") == 0) return COLLECTION_COLLECTING;
+    if (strcasecmp(s, "COLLECTED") == 0) return COLLECTION_COLLECTED;
+    if (strcasecmp(s, "DEPOSIT_PENDING") == 0) return COLLECTION_DEPOSIT_PENDING;
+    if (strcasecmp(s, "DEPOSITED_AT_HUB") == 0) return COLLECTION_DEPOSITED_AT_HUB;
+    if (strcasecmp(s, "COMPLETED") == 0) return COLLECTION_COMPLETED;
+    if (strcasecmp(s, "CANCELLED") == 0) return COLLECTION_CANCELLED;
+    if (strcasecmp(s, "MISSED") == 0) return COLLECTION_MISSED;
+    if (strcasecmp(s, "REJECTED") == 0) return COLLECTION_REJECTED;
+    if (strcasecmp(s, "RESCHEDULED") == 0) return COLLECTION_RESCHEDULED;
+    return COLLECTION_REQUESTED;
+}
+
+static void hubJsonEntry(JsonBuf *jb, int *first, const LocalHub *h) {
+    float load = calculateHubCurrentLoad(h->hubId);
+    float cap = h->maximumCapacityKg;
+    char nm[128], ad[170], cd[64], hc[64], zone[64];
+    jsonStr(nm, sizeof(nm), h->name);
+    jsonStr(ad, sizeof(ad), h->address);
+    jsonStr(cd, sizeof(cd), h->createdAt);
+    jsonStr(hc, sizeof(hc), h->hubCode);
+    jsonStr(zone, sizeof(zone), h->serviceZone);
+    char entry[900];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"hubId\":%d,\"hubCode\":\"%s\",\"name\":\"%s\",\"address\":\"%s\","
+        "\"latitude\":%.6f,\"longitude\":%.6f,\"maximumCapacityKg\":%.2f,"
+        "\"warningThresholdPercent\":%.2f,\"criticalThresholdPercent\":%.2f,"
+        "\"managerId\":%d,\"currentLoadKg\":%.2f,\"availableCapacityKg\":%.2f,"
+        "\"utilizationPercent\":%.2f,\"status\":\"%s\",\"serviceZone\":\"%s\","
+        "\"createdAt\":\"%s\",\"updatedAt\":\"%s\"}",
+        *first ? "" : ",", h->hubId, hc, nm, ad,
+        h->latitude, h->longitude, cap, h->warningThresholdPercent,
+        h->criticalThresholdPercent, h->managerId, load,
+        cap - load, cap > 0 ? (load / cap) * 100.0f : 0.0f,
+        hubStatusToStr(h->status), zone, cd, h->updatedAt);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+static void transferJsonEntry(JsonBuf *jb, int *first, const WasteTransfer *t) {
+    char nm[80], code[80], wt[64], pr[32], sd[64], st[64], vr[180], ve[240], su[32];
+    jsonStr(nm, sizeof(nm), t->destinationType);
+    jsonStr(code, sizeof(code), t->transferCode);
+    jsonStr(wt, sizeof(wt), t->wasteType);
+    jsonStr(pr, sizeof(pr), t->priority);
+    jsonStr(sd, sizeof(sd), t->scheduledDate);
+    jsonStr(st, sizeof(st), t->scheduledTime);
+    jsonStr(vr, sizeof(vr), t->varianceReason);
+    jsonStr(ve, sizeof(ve), t->varianceExplanation);
+    jsonStr(su, sizeof(su), t->status ? transferStatusToStr(t->status) : "REQUESTED");
+    float varPct = calculateLoadVariancePct(t->plannedWeightKg, t->actualLoadedWeightKg);
+    float delVar = calculateDeliveryVarianceKg(t->actualLoadedWeightKg, t->actualDeliveredWeightKg);
+    char entry[1100];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"transferId\":%d,\"transferCode\":\"%s\",\"sourceHubId\":%d,"
+        "\"destinationFacilityId\":%d,\"destinationType\":\"%s\",\"driverId\":%d,"
+        "\"vehicleId\":%d,\"plannedWeightKg\":%.2f,\"actualLoadedWeightKg\":%.2f,"
+        "\"actualDeliveredWeightKg\":%.2f,\"loadVariancePct\":%.2f,"
+        "\"deliveryVarianceKg\":%.2f,\"wasteType\":\"%s\",\"status\":\"%s\","
+        "\"priority\":\"%s\",\"scheduledDate\":\"%s\",\"scheduledTime\":\"%s\","
+        "\"varianceReason\":\"%s\",\"varianceExplanation\":\"%s\","
+        "\"outboundTransactionId\":%d,\"startedAt\":\"%s\",\"loadedAt\":\"%s\","
+        "\"departedAt\":\"%s\",\"arrivedAt\":\"%s\",\"completedAt\":\"%s\","
+        "\"createdBy\":%d,\"createdAt\":\"%s\",\"updatedAt\":\"%s\"}",
+        *first ? "" : ",", t->transferId, code, t->sourceHubId,
+        t->destinationFacilityId, nm, t->driverId, t->vehicleId,
+        t->plannedWeightKg, t->actualLoadedWeightKg, t->actualDeliveredWeightKg,
+        varPct, delVar, wt, su, pr, sd, st, vr, ve,
+        t->outboundTransactionId, t->startedAt, t->loadedAt, t->departedAt,
+        t->arrivedAt, t->completedAt, t->createdBy, t->createdAt, t->updatedAt);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+static bool facilityRecordSane(const TransportFacility *f) {
+    if (f->facilityId <= 0) return false;
+    if (f->maximumDailyCapacityKg < 0.0f || f->maximumDailyCapacityKg > 1000000.0f) return false;
+    if (f->latitude < -90 || f->latitude > 90 || f->longitude < -180 || f->longitude > 180) return false;
+    return true;
+}
+
+static void facilityJsonEntry(JsonBuf *jb, int *first, const TransportFacility *f) {
+    char code[40], nm[140], ty[80], ad[190], cs[60], cn[80], cp[40], st[40], cd[64], ud[64];
+    jsonStr(code, sizeof(code), f->facilityCode);
+    jsonStr(nm, sizeof(nm), f->name);
+    jsonStr(ty, sizeof(ty), f->facilityType);
+    jsonStr(ad, sizeof(ad), f->address);
+    jsonStr(cs, sizeof(cs), f->currentOperationalStatus);
+    jsonStr(cn, sizeof(cn), f->contactName);
+    jsonStr(cp, sizeof(cp), f->contactPhone);
+    jsonStr(st, sizeof(st), f->status);
+    jsonStr(cd, sizeof(cd), f->createdAt);
+    jsonStr(ud, sizeof(ud), f->updatedAt);
+    char entry[1000];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"facilityId\":%d,\"facilityCode\":\"%s\",\"name\":\"%s\","
+        "\"facilityType\":\"%s\",\"address\":\"%s\",\"latitude\":%.6f,\"longitude\":%.6f,"
+        "\"maximumDailyCapacityKg\":%.2f,\"currentOperationalStatus\":\"%s\","
+        "\"managerId\":%d,\"contactName\":\"%s\",\"contactPhone\":\"%s\","
+        "\"status\":\"%s\",\"createdAt\":\"%s\",\"updatedAt\":\"%s\"}",
+        *first ? "" : ",", f->facilityId, code, nm, ty, ad, f->latitude, f->longitude,
+        f->maximumDailyCapacityKg, cs, f->managerId, cn, cp, st, cd, ud);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+static void vehicleJsonEntry(JsonBuf *jb, int *first, const Vehicle *v) {
+    char vn[40], reg[60], vc[40], vt[60], mk[70], md[70], ie[40], xe[40], ls[40], st[40], cd[64], ud[64];
+    jsonStr(vn, sizeof(vn), v->vehicleNumber);
+    jsonStr(reg, sizeof(reg), v->registrationNumber);
+    jsonStr(vc, sizeof(vc), v->vehicleCode);
+    jsonStr(vt, sizeof(vt), v->vehicleType);
+    jsonStr(mk, sizeof(mk), v->make);
+    jsonStr(md, sizeof(md), v->model);
+    jsonStr(ie, sizeof(ie), v->insuranceExpiry);
+    jsonStr(xe, sizeof(xe), v->inspectionExpiry);
+    jsonStr(ls, sizeof(ls), v->lastServiceDate);
+    jsonStr(st, sizeof(st), vehicleStatusToStrV2(v->status));
+    jsonStr(cd, sizeof(cd), v->createdAt);
+    jsonStr(ud, sizeof(ud), v->updatedAt);
+    char err[128] = "";
+    bool compliant = isVehicleCompliant(v, err, sizeof(err));
+    char entry[900];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"vehicleId\":%d,\"vehicleNumber\":\"%s\",\"registrationNumber\":\"%s\","
+        "\"vehicleCode\":\"%s\",\"vehicleType\":\"%s\",\"make\":\"%s\",\"model\":\"%s\","
+        "\"manufactureYear\":%d,\"capacityKg\":%.2f,\"currentLoad\":%.2f,"
+        "\"assignedHubId\":%d,\"odometerKm\":%.2f,\"insuranceExpiry\":\"%s\","
+        "\"inspectionExpiry\":\"%s\",\"lastServiceDate\":\"%s\",\"status\":\"%s\","
+        "\"compliant\":%s,\"complianceNote\":\"%s\",\"createdAt\":\"%s\",\"updatedAt\":\"%s\"}",
+        *first ? "" : ",", v->vehicleId, vn, reg, vc, vt, mk, md, v->manufactureYear,
+        v->capacityKg, v->currentLoad, v->assignedHubId, v->odometerKm, ie, xe, ls,
+        st, compliant ? "true" : "false", err, cd, ud);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+static void collectionJsonEntry(JsonBuf *jb, int *first, const CollectionRequest *r) {
+    char wt[64], pl[40], ad[190], pd[64], pt[64], de[240], ms[60], vr[190], cd[64], ud[64], ct[64], st[40];
+    jsonStr(wt, sizeof(wt), r->wasteType);
+    jsonStr(pl, sizeof(pl), r->priorityLevel);
+    jsonStr(ad, sizeof(ad), r->address);
+    jsonStr(pd, sizeof(pd), r->preferredDate);
+    jsonStr(pt, sizeof(pt), r->preferredTime);
+    jsonStr(de, sizeof(de), r->description);
+    jsonStr(ms, sizeof(ms), r->measurementSource);
+    jsonStr(vr, sizeof(vr), r->varianceReason);
+    jsonStr(cd, sizeof(cd), r->createdAt);
+    jsonStr(ud, sizeof(ud), r->updatedAt);
+    jsonStr(ct, sizeof(ct), r->completedAt);
+    jsonStr(st, sizeof(st), collectionStatusToStr(r->status));
+    char entry[1100];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"collectionId\":%d,\"residentId\":%d,\"hubId\":%d,\"cleanerId\":%d,"
+        "\"vehicleId\":%d,\"binId\":%d,\"address\":\"%s\",\"latitude\":%.6f,\"longitude\":%.6f,"
+        "\"wasteType\":\"%s\",\"estimatedWeightKg\":%.2f,\"actualWeightKg\":%.2f,"
+        "\"depositedWeightKg\":%.2f,\"preferredDate\":\"%s\",\"preferredTime\":\"%s\","
+        "\"description\":\"%s\",\"priorityScore\":%d,\"priorityLevel\":\"%s\","
+        "\"status\":\"%s\",\"measurementSource\":\"%s\",\"varianceReason\":\"%s\","
+        "\"createdAt\":\"%s\",\"updatedAt\":\"%s\",\"completedAt\":\"%s\"}",
+        *first ? "" : ",", r->collectionId, r->residentId, r->hubId, r->cleanerId,
+        r->vehicleId, r->binId, ad, r->latitude, r->longitude, wt, r->estimatedWeightKg,
+        r->actualWeightKg, r->depositedWeightKg, pd, pt, de, r->priorityScore, pl,
+        st, ms, vr, cd, ud, ct);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+static void batchJsonEntry(JsonBuf *jb, int *first, const RecyclingBatch *b) {
+    char code[60], cd[64], pd[64], xd[64];
+    jsonStr(code, sizeof(code), b->batchCode);
+    jsonStr(cd, sizeof(cd), b->createdAt);
+    jsonStr(pd, sizeof(pd), b->processedAt);
+    jsonStr(xd, sizeof(xd), b->completedAt);
+    char entry[600];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"batchId\":%d,\"batchCode\":\"%s\",\"facilityId\":%d,\"sourceTransferId\":%d,"
+        "\"sourceHubId\":%d,\"inputWeightKg\":%.2f,\"processedWeightKg\":%.2f,"
+        "\"recoveredWeightKg\":%.2f,\"residualWeightKg\":%.2f,\"status\":\"%s\","
+        "\"createdAt\":\"%s\",\"processedAt\":\"%s\",\"completedAt\":\"%s\"}",
+        *first ? "" : ",", b->batchId, code, b->facilityId, b->sourceTransferId,
+        b->sourceHubId, b->inputWeightKg, b->processedWeightKg, b->recoveredWeightKg,
+        b->residualWeightKg, batchStatusName(b->status), cd, pd, xd);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+// Workspace-filtered read of the collection store (getAllCollectionRequests
+// does not filter, so handlers must do it here).
+static int getWorkspaceCollections(CollectionRequest *out, int max) {
+    FILE *fp = fopen(COLLECTIONS_FILE, "rb");
+    if (!fp) return 0;
+    int count = 0;
+    CollectionRequest r;
+    while (count < max && fread(&r, sizeof(CollectionRequest), 1, fp) == 1) {
+        if (g_current_workspace[0] != '\0' && strcmp(r.workspaceId, g_current_workspace) != 0) continue;
+        out[count++] = r;
+    }
+    fclose(fp);
+    return count;
+}
+
+static void sendHubList(struct mg_connection *c) {
+    LocalHub hubs[100];
+    int count = getAllHubs(hubs, 100);
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < count; i++) hubJsonEntry(&jb, &first, &hubs[i]);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void sendTransferList(struct mg_connection *c, WasteTransfer *arr, int n) {
+    JsonBuf jb;
+    jbInit(&jb, 8192);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < n; i++) transferJsonEntry(&jb, &first, &arr[i]);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void sendFacilityList(struct mg_connection *c) {
+    TransportFacility list[100];
+    int count = getAllFacilities(list, 100);
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < count; i++) {
+        if (!facilityRecordSane(&list[i])) continue;
+        facilityJsonEntry(&jb, &first, &list[i]);
+    }
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void sendVehicleList(struct mg_connection *c, Vehicle *arr, int n) {
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < n; i++) vehicleJsonEntry(&jb, &first, &arr[i]);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void sendCollectionList(struct mg_connection *c, CollectionRequest *arr, int n) {
+    JsonBuf jb;
+    jbInit(&jb, 8192);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < n; i++) collectionJsonEntry(&jb, &first, &arr[i]);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void sendBatchList(struct mg_connection *c) {
+    RecyclingBatch list[100];
+    int count = getAllBatches(list, 100);
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "{\"batches\":[");
+    int first = 1;
+    for (int i = 0; i < count; i++) batchJsonEntry(&jb, &first, &list[i]);
+    jbPuts(&jb, "]}");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void driverJsonEntry(JsonBuf *jb, int *first, const User *u, const DriverProfile *p) {
+    char nm[100], un[70], ph[50], ln[60], le[40], ec[60], lc[60], av[60], cd[64], ud[64];
+    jsonStr(nm, sizeof(nm), u->name);
+    jsonStr(un, sizeof(un), u->username);
+    jsonStr(ph, sizeof(ph), u->phone);
+    jsonStr(ln, sizeof(ln), u->licenseNumber);
+    jsonStr(le, sizeof(le), u->licenseExpiry);
+    jsonStr(ec, sizeof(ec), p->employeeCode);
+    jsonStr(lc, sizeof(lc), p->licenseCategory);
+    jsonStr(av, sizeof(av), p->availability);
+    jsonStr(cd, sizeof(cd), p->createdAt);
+    jsonStr(ud, sizeof(ud), p->updatedAt);
+    char entry[900];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"userId\":%d,\"name\":\"%s\",\"username\":\"%s\",\"phone\":\"%s\","
+        "\"licenseNumber\":\"%s\",\"licenseExpiry\":\"%s\",\"assignedHub\":%d,"
+        "\"status\":%d,\"driverProfile\":{\"profileId\":%d,\"userId\":%d,"
+        "\"employeeCode\":\"%s\",\"licenseCategory\":\"%s\",\"availability\":\"%s\","
+        "\"currentTransferId\":%d,\"totalKmDriven\":%.2f,\"createdAt\":\"%s\","
+        "\"updatedAt\":\"%s\"}}",
+        *first ? "" : ",", u->userId, nm, un, ph, ln, le, u->assignedHub, u->status,
+        p->profileId, p->userId, ec, lc, av, p->currentTransferId, p->totalKmDriven, cd, ud);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+static void sendDriverList(struct mg_connection *c, bool availableOnly) {
+    DriverProfile profiles[100];
+    int count = availableOnly ? getAvailableDriverProfiles(profiles, 100)
+                              : getAllDriverProfiles(profiles, 100);
+    JsonBuf jb;
+    jbInit(&jb, 8192);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < count; i++) {
+        // Only include users that are actually DRIVERs and active.
+        User u;
+        if (!getUserById(profiles[i].userId, &u)) continue;
+        if (u.role != ROLE_DRIVER) continue;
+        if (u.status != 1) continue;
+        driverJsonEntry(&jb, &first, &u, &profiles[i]);
+    }
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+// List handlers (bare arrays matching the React types)
+static void handleGetFacilitiesList(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    sendFacilityList(c);
+}
+
+static void handleGetDriversList(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    sendDriverList(c, false);
+}
+
+static void handleGetAvailableDriversList(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    sendDriverList(c, true);
+}
+
+static void handleGetMyDriverAssignment(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    DriverProfile p;
+    WasteTransfer active;
+    if (!getDriverProfile(u.userId, &p)) {
+        sendJsonResponse(c, 200, "{\"driverProfile\":null,\"activeTransfer\":null}");
+        return;
+    }
+    char prof[800];
+    int n = snprintf(prof, sizeof(prof), "{\"driverProfile\":{");
+    char nm[100], ec[60], lc[60], av[60], cd[64], ud[64];
+    jsonStr(nm, sizeof(nm), u.name);
+    jsonStr(ec, sizeof(ec), p.employeeCode);
+    jsonStr(lc, sizeof(lc), p.licenseCategory);
+    jsonStr(av, sizeof(av), p.availability);
+    jsonStr(cd, sizeof(cd), p.createdAt);
+    jsonStr(ud, sizeof(ud), p.updatedAt);
+    n += snprintf(prof + n, sizeof(prof) - (size_t)n,
+        "\"profileId\":%d,\"userId\":%d,\"employeeCode\":\"%s\",\"licenseCategory\":\"%s\","
+        "\"availability\":\"%s\",\"currentTransferId\":%d,\"totalKmDriven\":%.2f,"
+        "\"createdAt\":\"%s\",\"updatedAt\":\"%s\"},\"name\":\"%s\",\"username\":\"%s\","
+        "\"phone\":\"%s\",\"licenseNumber\":\"%s\",\"licenseExpiry\":\"%s\","
+        "\"assignedHub\":%d,\"status\":%d,\"activeTransfer\":",
+        p.profileId, p.userId, ec, lc, av, p.currentTransferId, p.totalKmDriven, cd, ud,
+        nm, u.username, u.phone, u.licenseNumber, u.licenseExpiry, u.assignedHub, u.status);
+    if (getActiveTransferForDriver(u.userId, &active)) {
+        JsonBuf inner;
+        jbInit(&inner, 1024);
+        int first = 1;
+        transferJsonEntry(&inner, &first, &active);
+        snprintf(prof + n, sizeof(prof) - (size_t)n, "%s}", inner.data);
+        jbFree(&inner);
+    } else {
+        snprintf(prof + n, sizeof(prof) - (size_t)n, "null}");
+    }
+    sendJsonResponse(c, 200, prof);
+}
+
+static void handleSaveDriverProfile(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    char code[80] = "", lic[80] = "", avail[80] = "";
+    mg_json_unescape(hm->body, "$.employeeCode", code, sizeof(code));
+    mg_json_unescape(hm->body, "$.licenseCategory", lic, sizeof(lic));
+    mg_json_unescape(hm->body, "$.availability", avail, sizeof(avail));
+    DriverProfile p;
+    bool exists = getDriverProfile(u.userId, &p);
+    if (!exists) memset(&p, 0, sizeof(p));
+    p.userId = u.userId;
+    if (code[0]) snprintf(p.employeeCode, sizeof(p.employeeCode), "%s", code);
+    if (lic[0]) snprintf(p.licenseCategory, sizeof(p.licenseCategory), "%s", lic);
+    if (avail[0]) snprintf(p.availability, sizeof(p.availability), "%s", avail);
+    if (addOrUpdateDriverProfile(&p)) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"profileId\":%d}", p.profileId);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to save driver profile\"}");
+    }
+}
+
+static void handleGetAvailableVehicles(struct mg_connection *c, struct mg_http_message *hm) {
+    char hubStr[32] = "";
+    mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr));
+    int hubId = atoi(hubStr);
+    Vehicle list[100];
+    int count = getAvailableVehicles(hubId, list, 100);
+    sendVehicleList(c, list, count);
+}
+
+static void handleGetHubVehicles(struct mg_connection *c, struct mg_http_message *hm) {
+    char hubStr[32] = "";
+    mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr));
+    int hubId = atoi(hubStr);
+    Vehicle list[100];
+    int count = getVehiclesByHub(hubId, list, 100);
+    sendVehicleList(c, list, count);
+}
+
+static void handleUpdateVehicle(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    double vId = 0;
+    mg_json_get_num(hm->body, "$.vehicleId", &vId);
+    Vehicle v;
+    if ((int)vId <= 0 || !getVehicleById((int)vId, &v)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Vehicle not found\"}");
+        return;
+    }
+    char s[80] = "";
+    mg_json_unescape(hm->body, "$.status", s, sizeof(s));
+    if (s[0]) v.status = vehicleStatusFromStr(s);
+    mg_json_unescape(hm->body, "$.vehicleType", s, sizeof(s));
+    if (s[0]) snprintf(v.vehicleType, sizeof(v.vehicleType), "%s", s);
+    mg_json_unescape(hm->body, "$.make", s, sizeof(s));
+    if (s[0]) snprintf(v.make, sizeof(v.make), "%s", s);
+    mg_json_unescape(hm->body, "$.model", s, sizeof(s));
+    if (s[0]) snprintf(v.model, sizeof(v.model), "%s", s);
+    double num = 0;
+    mg_json_get_num(hm->body, "$.capacityKg", &num);
+    if (num > 0) v.capacityKg = (float)num;
+    mg_json_get_num(hm->body, "$.odometerKm", &num);
+    if (num >= 0) v.odometerKm = (float)num;
+    mg_json_get_num(hm->body, "$.assignedHubId", &num);
+    if (num >= 0) v.assignedHubId = (int)num;
+    if (updateVehicle(&v)) {
+        sendJsonResponse(c, 200, "{\"success\":true}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update vehicle\"}");
+    }
+}
+
+static void handleSetVehicleStatus(struct mg_connection *c, struct mg_http_message *hm) {
+    double vId = 0;
+    mg_json_get_num(hm->body, "$.vehicleId", &vId);
+    char status[40] = "";
+    mg_json_unescape(hm->body, "$.status", status, sizeof(status));
+    Vehicle v;
+    if ((int)vId <= 0 || !getVehicleById((int)vId, &v)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Vehicle not found\"}");
+        return;
+    }
+    if (!status[0]) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"status is required\"}");
+        return;
+    }
+    v.status = vehicleStatusFromStr(status);
+    if (updateVehicle(&v)) {
+        sendJsonResponse(c, 200, "{\"success\":true}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update vehicle status\"}");
+    }
+}
+
+static void handleCreateFacility(struct mg_connection *c, struct mg_http_message *hm) {
+    char name[120] = "", code[60] = "", type[80] = "", address[190] = "", contactName[80] = "", contactPhone[60] = "", status[40] = "";
+    mg_json_unescape(hm->body, "$.name", name, sizeof(name));
+    mg_json_unescape(hm->body, "$.facilityCode", code, sizeof(code));
+    mg_json_unescape(hm->body, "$.facilityType", type, sizeof(type));
+    mg_json_unescape(hm->body, "$.address", address, sizeof(address));
+    mg_json_unescape(hm->body, "$.contactName", contactName, sizeof(contactName));
+    mg_json_unescape(hm->body, "$.contactPhone", contactPhone, sizeof(contactPhone));
+    mg_json_unescape(hm->body, "$.status", status, sizeof(status));
+    if (!name[0]) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"name is required\"}");
+        return;
+    }
+    TransportFacility f;
+    memset(&f, 0, sizeof(f));
+    snprintf(f.name, sizeof(f.name), "%s", name);
+    snprintf(f.facilityCode, sizeof(f.facilityCode), "%s", code[0] ? code : "FAC-001");
+    snprintf(f.facilityType, sizeof(f.facilityType), "%s", type[0] ? type : "RECYCLING_HUB");
+    snprintf(f.address, sizeof(f.address), "%s", address);
+    snprintf(f.contactName, sizeof(f.contactName), "%s", contactName);
+    snprintf(f.contactPhone, sizeof(f.contactPhone), "%s", contactPhone);
+    snprintf(f.status, sizeof(f.status), "%s", status[0] ? status : "ACTIVE");
+    snprintf(f.currentOperationalStatus, sizeof(f.currentOperationalStatus), "OPERATIONAL");
+    double num = 0;
+    mg_json_get_num(hm->body, "$.maximumDailyCapacityKg", &num);
+    f.maximumDailyCapacityKg = num > 0 ? (float)num : 5000.0f;
+    mg_json_get_num(hm->body, "$.latitude", &num);
+    f.latitude = num;
+    mg_json_get_num(hm->body, "$.longitude", &num);
+    f.longitude = num;
+    snprintf(f.workspaceId, sizeof(f.workspaceId), "%s", g_current_workspace);
+    if (addFacility(&f)) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"facilityId\":%d}", f.facilityId);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create facility\"}");
+    }
+}
+
 char g_current_workspace[37] = {0};
+
+// ─────────────────────────────────────────────────────────────
+// P0 ADMIN PORTAL RECOVERY: real mutation handlers.
+// ─────────────────────────────────────────────────────────────
+static void hubTxJsonEntry(JsonBuf *jb, int *first, const HubInventoryTransaction *t) {
+    char tt[60], wt[64], st[60], dt[60], ms[60], ts[64];
+    jsonStr(tt, sizeof(tt), t->transactionType);
+    jsonStr(wt, sizeof(wt), t->wasteType);
+    jsonStr(st, sizeof(st), t->sourceType);
+    jsonStr(dt, sizeof(dt), t->destinationType);
+    jsonStr(ms, sizeof(ms), t->measurementSource);
+    jsonStr(ts, sizeof(ts), t->timestamp);
+    char entry[700];
+    int n = snprintf(entry, sizeof(entry),
+        "%s{\"transactionId\":%d,\"hubId\":%d,\"transactionType\":\"%s\","
+        "\"quantityKg\":%.2f,\"wasteType\":\"%s\",\"sourceType\":\"%s\","
+        "\"sourceId\":%d,\"destinationType\":\"%s\",\"destinationId\":%d,"
+        "\"recordedBy\":%d,\"measurementSource\":\"%s\",\"timestamp\":\"%s\"}",
+        *first ? "" : ",", t->transactionId, t->hubId, tt, t->quantityKg, wt,
+        st, t->sourceId, dt, t->destinationId, t->recordedBy, ms, ts);
+    jbAppend(jb, entry, (size_t)n);
+    *first = 0;
+}
+
+static void sendHubTransactionList(struct mg_connection *c, HubInventoryTransaction *arr, int n) {
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < n; i++) hubTxJsonEntry(&jb, &first, &arr[i]);
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+// ── Collections ──────────────────────────────────────────────
+static void handleGetCollectionsByHub(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    char hubStr[32] = "";
+    mg_http_get_var(&hm->query, "hubId", hubStr, sizeof(hubStr));
+    int hubId = atoi(hubStr);
+    if (hubId <= 0) hubId = u.assignedHub;
+    CollectionRequest list[100];
+    int count = hubId > 0 ? getCollectionsByHubId(hubId, list, 100) : 0;
+    sendCollectionList(c, list, count);
+}
+
+static void handleCreateCollectionRequest(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    char wasteType[64] = "", date[64] = "", time[64] = "", desc[240] = "";
+    double estKg = 0, lat = 0, lon = 0, hubIdNum = 0, resIdNum = 0;
+    mg_json_unescape(hm->body, "$.wasteType", wasteType, sizeof(wasteType));
+    mg_json_unescape(hm->body, "$.preferredDate", date, sizeof(date));
+    mg_json_unescape(hm->body, "$.preferredTime", time, sizeof(time));
+    mg_json_unescape(hm->body, "$.description", desc, sizeof(desc));
+    mg_json_get_num(hm->body, "$.estimatedWeightKg", &estKg);
+    mg_json_get_num(hm->body, "$.hubId", &hubIdNum);
+    mg_json_get_num(hm->body, "$.residentId", &resIdNum);
+
+    int residentId = (int)resIdNum;
+    Resident res;
+    memset(&res, 0, sizeof(res));
+    if (residentId <= 0) {
+        if (!getResidentByUserId(u.userId, &res)) {
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"No resident profile for this account\"}");
+            return;
+        }
+        residentId = res.residentId;
+    } else if (!getResidentByUserId(u.userId, &res)) {
+        // Admin/manager supplying a resident id: load by id if available.
+        memset(&res, 0, sizeof(res));
+    }
+
+    int hubId = (int)hubIdNum;
+    if (hubId <= 0) {
+        LocalHub hubs[50];
+        int n = getAllHubs(hubs, 50);
+        hubId = n > 0 ? hubs[0].hubId : 1;
+    }
+
+    if (!wasteType[0] || estKg <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"wasteType and estimatedWeightKg are required\"}");
+        return;
+    }
+
+    CollectionRequest req;
+    memset(&req, 0, sizeof(req));
+    req.residentId = residentId;
+    req.hubId = hubId;
+    snprintf(req.wasteType, sizeof(req.wasteType), "%s", wasteType);
+    req.estimatedWeightKg = (float)estKg;
+    snprintf(req.preferredDate, sizeof(req.preferredDate), "%s", date);
+    snprintf(req.preferredTime, sizeof(req.preferredTime), "%s", time);
+    snprintf(req.description, sizeof(req.description), "%s", desc);
+    snprintf(req.address, sizeof(req.address), "%s", res.address[0] ? res.address : "");
+    req.latitude = lat;
+    req.longitude = lon;
+    req.workspaceId[0] = '\0';
+    snprintf(req.workspaceId, sizeof(req.workspaceId), "%s", g_current_workspace);
+    if (addCollectionRequest(&req)) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"collectionId\":%d}", req.collectionId);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create collection request\"}");
+    }
+}
+
+static void handleAssignCleaner(struct mg_connection *c, struct mg_http_message *hm) {
+    double cId = 0, clId = 0;
+    mg_json_get_num(hm->body, "$.collectionId", &cId);
+    mg_json_get_num(hm->body, "$.cleanerId", &clId);
+    CollectionRequest req;
+    if ((int)cId <= 0 || !getCollectionRequestById((int)cId, &req)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Collection not found\"}");
+        return;
+    }
+    float workload = 0;
+    char err[160] = "";
+    if (!canAssignCleanerToCollection((int)clId, req.hubId, &workload, err, sizeof(err))) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"success\":false,\"message\":\"%s\"}", err);
+        sendJsonResponse(c, 400, buf);
+        return;
+    }
+    req.cleanerId = (int)clId;
+    req.status = COLLECTION_ASSIGNED;
+    getCurrentTimestamp(req.updatedAt, sizeof(req.updatedAt));
+    if (updateCollectionRequest(&req)) {
+        sendJsonResponse(c, 200, "{\"success\":true}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update collection\"}");
+    }
+}
+
+static void handleUpdateCollectionStatus(struct mg_connection *c, struct mg_http_message *hm) {
+    double cId = 0;
+    mg_json_get_num(hm->body, "$.collectionId", &cId);
+    char status[40] = "";
+    mg_json_unescape(hm->body, "$.status", status, sizeof(status));
+    CollectionRequest req;
+    if ((int)cId <= 0 || !getCollectionRequestById((int)cId, &req)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Collection not found\"}");
+        return;
+    }
+    if (!status[0]) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"status is required\"}");
+        return;
+    }
+    CollectionStatus target = collectionStatusFromStr(status);
+    if (!isValidStateTransition(req.status, target)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"success\":false,\"message\":\"Invalid transition from %s to %s\"}",
+                 collectionStatusToStr(req.status), status);
+        sendJsonResponse(c, 400, buf);
+        return;
+    }
+    req.status = target;
+    getCurrentTimestamp(req.updatedAt, sizeof(req.updatedAt));
+    if (target == COLLECTION_COMPLETED) {
+        getCurrentTimestamp(req.completedAt, sizeof(req.completedAt));
+    }
+    if (updateCollectionRequest(&req)) {
+        sendJsonResponse(c, 200, "{\"success\":true}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update collection\"}");
+    }
+}
+
+static void handleRecordCollectionWeight(struct mg_connection *c, struct mg_http_message *hm) {
+    double cId = 0, weight = 0;
+    mg_json_get_num(hm->body, "$.collectionId", &cId);
+    mg_json_get_num(hm->body, "$.actualWeightKg", &weight);
+    char src[64] = "", wt[64] = "";
+    mg_json_unescape(hm->body, "$.measurementSource", src, sizeof(src));
+    mg_json_unescape(hm->body, "$.wasteType", wt, sizeof(wt));
+    CollectionRequest req;
+    if ((int)cId <= 0 || !getCollectionRequestById((int)cId, &req)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Collection not found\"}");
+        return;
+    }
+    req.actualWeightKg = (float)weight;
+    if (src[0]) snprintf(req.measurementSource, sizeof(req.measurementSource), "%s", src);
+    if (wt[0]) snprintf(req.wasteType, sizeof(req.wasteType), "%s", wt);
+    req.status = COLLECTION_COLLECTED;
+    getCurrentTimestamp(req.updatedAt, sizeof(req.updatedAt));
+    if (updateCollectionRequest(&req)) {
+        sendJsonResponse(c, 200, "{\"success\":true}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update collection\"}");
+    }
+}
+
+static void handleDepositWasteAtHub(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    double cId = 0, weight = 0, overrideNum = 0;
+    mg_json_get_num(hm->body, "$.collectionId", &cId);
+    mg_json_get_num(hm->body, "$.depositedWeightKg", &weight);
+    mg_json_get_num(hm->body, "$.emergencyOverride", &overrideNum);
+    char qr[80] = "", reason[200] = "";
+    mg_json_unescape(hm->body, "$.scannedQr", qr, sizeof(qr));
+    mg_json_unescape(hm->body, "$.varianceReason", reason, sizeof(reason));
+    char err[240] = "";
+    if (!processHubDeposit((int)cId, u.userId, qr, (float)weight,
+                           reason[0] ? reason : NULL, (int)overrideNum, err, sizeof(err))) {
+        char buf[300];
+        snprintf(buf, sizeof(buf), "{\"success\":false,\"message\":\"%s\"}", err[0] ? err : "Deposit failed");
+        sendJsonResponse(c, 400, buf);
+        return;
+    }
+    sendJsonResponse(c, 200, "{\"success\":true}");
+}
+
+static void handleReportMissedCollection(struct mg_connection *c, struct mg_http_message *hm) {
+    double cId = 0;
+    mg_json_get_num(hm->body, "$.collectionId", &cId);
+    char reason[240] = "";
+    mg_json_unescape(hm->body, "$.reason", reason, sizeof(reason));
+    CollectionRequest req;
+    if ((int)cId <= 0 || !getCollectionRequestById((int)cId, &req)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Collection not found\"}");
+        return;
+    }
+    req.status = COLLECTION_MISSED;
+    getCurrentTimestamp(req.updatedAt, sizeof(req.updatedAt));
+    Incident inc;
+    memset(&inc, 0, sizeof(inc));
+    snprintf(inc.type, sizeof(inc.type), "MISSED_COLLECTION");
+    snprintf(inc.severity, sizeof(inc.severity), "MEDIUM");
+    inc.collectionId = (int)cId;
+    inc.entityType[0] = '\0';
+    snprintf(inc.entityType, sizeof(inc.entityType), "COLLECTION");
+    inc.entityId = (int)cId;
+    inc.hubId = req.hubId;
+    snprintf(inc.description, sizeof(inc.description), "Collection #%d missed: %s", (int)cId, reason[0] ? reason : "No reason provided");
+    addIncident(&inc);
+    updateCollectionRequest(&req);
+    char buf[160];
+    snprintf(buf, sizeof(buf), "{\"success\":true,\"incidentId\":%d}", inc.incidentId);
+    sendJsonResponse(c, 200, buf);
+}
+
+static void handleRescheduleCollection(struct mg_connection *c, struct mg_http_message *hm) {
+    double cId = 0, clId = 0;
+    mg_json_get_num(hm->body, "$.collectionId", &cId);
+    mg_json_get_num(hm->body, "$.cleanerId", &clId);
+    char date[64] = "", time[64] = "";
+    mg_json_unescape(hm->body, "$.preferredDate", date, sizeof(date));
+    mg_json_unescape(hm->body, "$.preferredTime", time, sizeof(time));
+    CollectionRequest req;
+    if ((int)cId <= 0 || !getCollectionRequestById((int)cId, &req)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Collection not found\"}");
+        return;
+    }
+    if (date[0]) snprintf(req.preferredDate, sizeof(req.preferredDate), "%s", date);
+    if (time[0]) snprintf(req.preferredTime, sizeof(req.preferredTime), "%s", time);
+    if ((int)clId > 0) req.cleanerId = (int)clId;
+    req.status = COLLECTION_RESCHEDULED;
+    getCurrentTimestamp(req.updatedAt, sizeof(req.updatedAt));
+    if (updateCollectionRequest(&req)) {
+        sendJsonResponse(c, 200, "{\"success\":true}");
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update collection\"}");
+    }
+}
+
+static void handleProcessNextCollection(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    CollectionRequest list[200];
+    int count = getAllCollectionRequests(list, 200);
+    int best = -1, bestScore = -1;
+    for (int i = 0; i < count; i++) {
+        if (list[i].status != COLLECTION_REQUESTED && list[i].status != COLLECTION_UNDER_REVIEW &&
+            list[i].status != COLLECTION_ASSIGNED) continue;
+        if (list[i].priorityScore > bestScore) { bestScore = list[i].priorityScore; best = i; }
+    }
+    if (best < 0) {
+        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"No pending collections to process\"}");
+        return;
+    }
+    CollectionRequest *r = &list[best];
+    r->status = COLLECTION_COMPLETED;
+    getCurrentTimestamp(r->completedAt, sizeof(r->completedAt));
+    getCurrentTimestamp(r->updatedAt, sizeof(r->updatedAt));
+    updateCollectionRequest(r);
+    char buf[200];
+    snprintf(buf, sizeof(buf), "{\"success\":true,\"message\":\"Highest priority collection processed\",\"collectionId\":%d}", r->collectionId);
+    sendJsonResponse(c, 200, buf);
+}
+
+static void handleCollectionDispatch(struct mg_connection *c, struct mg_http_message *hm) {
+    const char *uri = "/api/collections/";
+    int prefixLen = (int)strlen(uri);
+    if (hm->uri.len < (size_t)prefixLen) { sendJsonResponse(c, 404, "{\"error\":\"Not found\"}"); return; }
+    const char *action = hm->uri.buf + prefixLen;
+    size_t actionLen = hm->uri.len - (size_t)prefixLen;
+    if (actionLen == 7 && strncmp(action, "request", 7) == 0) { handleCreateCollectionRequest(c, hm); return; }
+    if (actionLen == 6 && strncmp(action, "assign", 6) == 0) { handleAssignCleaner(c, hm); return; }
+    if (actionLen == 6 && strncmp(action, "status", 6) == 0) { handleUpdateCollectionStatus(c, hm); return; }
+    if (actionLen == 13 && strncmp(action, "record-weight", 13) == 0) { handleRecordCollectionWeight(c, hm); return; }
+    if (actionLen == 10 && strncmp(action, "deposit-hub", 10) == 0) { handleDepositWasteAtHub(c, hm); return; }
+    if (actionLen == 12 && strncmp(action, "report-missed", 12) == 0) { handleReportMissedCollection(c, hm); return; }
+    if (actionLen == 10 && strncmp(action, "reschedule", 10) == 0) { handleRescheduleCollection(c, hm); return; }
+    if (actionLen == 7 && strncmp(action, "process", 7) == 0) { handleProcessNextCollection(c, hm); return; }
+    sendJsonResponse(c, 404, "{\"error\":\"Not found\"}");
+}
+
+// ── Transfers ────────────────────────────────────────────────
+static void handleCreateTransferAPI(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    double destFac = 0, planned = 0, hubNum = 0;
+    mg_json_get_num(hm->body, "$.destinationFacilityId", &destFac);
+    mg_json_get_num(hm->body, "$.plannedWeightKg", &planned);
+    mg_json_get_num(hm->body, "$.sourceHubId", &hubNum);
+    char code[64] = "", destType[80] = "", wasteType[64] = "", priority[40] = "", schedDate[64] = "", schedTime[64] = "";
+    mg_json_unescape(hm->body, "$.transferCode", code, sizeof(code));
+    mg_json_unescape(hm->body, "$.destinationType", destType, sizeof(destType));
+    mg_json_unescape(hm->body, "$.wasteType", wasteType, sizeof(wasteType));
+    mg_json_unescape(hm->body, "$.priority", priority, sizeof(priority));
+    mg_json_unescape(hm->body, "$.scheduledDate", schedDate, sizeof(schedDate));
+    mg_json_unescape(hm->body, "$.scheduledTime", schedTime, sizeof(schedTime));
+    if ((int)destFac <= 0 || planned <= 0) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"destinationFacilityId and plannedWeightKg are required\"}");
+        return;
+    }
+    int sourceHub = (int)hubNum;
+    if (sourceHub <= 0) sourceHub = u.assignedHub > 0 ? u.assignedHub : 1;
+    WasteTransfer t;
+    memset(&t, 0, sizeof(t));
+    t.sourceHubId = sourceHub;
+    t.destinationFacilityId = (int)destFac;
+    snprintf(t.destinationType, sizeof(t.destinationType), "%s", destType[0] ? destType : "RECYCLING_HUB");
+    snprintf(t.wasteType, sizeof(t.wasteType), "%s", wasteType);
+    t.plannedWeightKg = (float)planned;
+    snprintf(t.priority, sizeof(t.priority), "%s", priority[0] ? priority : "NORMAL");
+    snprintf(t.scheduledDate, sizeof(t.scheduledDate), "%s", schedDate);
+    snprintf(t.scheduledTime, sizeof(t.scheduledTime), "%s", schedTime);
+    snprintf(t.transferCode, sizeof(t.transferCode), "%s", code);
+    t.createdBy = u.userId;
+    snprintf(t.workspaceId, sizeof(t.workspaceId), "%s", g_current_workspace);
+    char err[200] = "";
+    float hubLoad = calculateHubCurrentLoad(sourceHub);
+    if (!validateTransferForCreation(&t, hubLoad, 0.0f, err, sizeof(err))) {
+        char buf[260];
+        snprintf(buf, sizeof(buf), "{\"success\":false,\"message\":\"%s\"}", err);
+        sendJsonResponse(c, 400, buf);
+        return;
+    }
+    if (addTransfer(&t)) {
+        char buf[200];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"transferId\":%d,\"transferCode\":\"%s\"}", t.transferId, t.transferCode);
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create transfer\"}");
+    }
+}
+
+// Helper: load a transfer by id from body and apply a validated transition.
+static bool transferFromBody(struct mg_http_message *hm, WasteTransfer *out, int *idOut) {
+    double id = 0;
+    mg_json_get_num(hm->body, "$.transferId", &id);
+    *idOut = (int)id;
+    return (int)id > 0 && getTransferById((int)id, out);
+}
+
+static void transferTransition(struct mg_connection *c, struct mg_http_message *hm, TransferStatus target,
+                               int doUpdate, const char *errPrefix) {
+    WasteTransfer t;
+    int id = 0;
+    if (!transferFromBody(hm, &t, &id)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}");
+        return;
+    }
+    if (!isValidTransferTransition(t.status, target)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "{\"success\":false,\"message\":\"Invalid transition from %s to %s (%s)\"}",
+                 transferStatusToStr(t.status), transferStatusToStr(target), errPrefix);
+        sendJsonResponse(c, 400, buf);
+        return;
+    }
+    t.status = target;
+    getCurrentTimestamp(t.updatedAt, sizeof(t.updatedAt));
+    if (target == TRANSFER_DEPARTED) getCurrentTimestamp(t.departedAt, sizeof(t.departedAt));
+    if (target == TRANSFER_ARRIVED) getCurrentTimestamp(t.arrivedAt, sizeof(t.arrivedAt));
+    if (target == TRANSFER_COMPLETED) getCurrentTimestamp(t.completedAt, sizeof(t.completedAt));
+    if (doUpdate && updateTransfer(&t)) {
+        char buf[192];
+        snprintf(buf, sizeof(buf), "{\"success\":true,\"status\":\"%s\"}", transferStatusToStr(t.status));
+        sendJsonResponse(c, 200, buf);
+    } else {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update transfer\"}");
+    }
+}
+
+static void handleTransferAction(struct mg_connection *c, struct mg_http_message *hm) {
+    const char *uri = "/api/transfers/";
+    int prefixLen = (int)strlen(uri);
+    if (hm->uri.len < (size_t)prefixLen) { sendJsonResponse(c, 404, "{\"error\":\"Not found\"}"); return; }
+    const char *action = hm->uri.buf + prefixLen;
+    size_t actionLen = hm->uri.len - (size_t)prefixLen;
+
+    if (actionLen == 7 && strncmp(action, "approve", 7) == 0) {
+        transferTransition(c, hm, TRANSFER_APPROVED, 1, "approve");
+        return;
+    }
+    if (actionLen == 12 && strncmp(action, "assign-driver", 12) == 0) {
+        WasteTransfer t; int id = 0;
+        if (!transferFromBody(hm, &t, &id)) { sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}"); return; }
+        double dId = 0; mg_json_get_num(hm->body, "$.driverId", &dId);
+        if ((int)dId <= 0) { sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"driverId is required\"}"); return; }
+        t.driverId = (int)dId;
+        t.status = TRANSFER_DRIVER_ASSIGNED;
+        getCurrentTimestamp(t.updatedAt, sizeof(t.updatedAt));
+        setDriverAvailability((int)dId, "ASSIGNED", id);
+        if (updateTransfer(&t)) sendJsonResponse(c, 200, "{\"success\":true,\"status\":\"DRIVER_ASSIGNED\"}");
+        else sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update transfer\"}");
+        return;
+    }
+    if (actionLen == 13 && strncmp(action, "assign-vehicle", 13) == 0) {
+        WasteTransfer t; int id = 0;
+        if (!transferFromBody(hm, &t, &id)) { sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}"); return; }
+        double vId = 0; mg_json_get_num(hm->body, "$.vehicleId", &vId);
+        if ((int)vId <= 0) { sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"vehicleId is required\"}"); return; }
+        t.vehicleId = (int)vId;
+        t.status = TRANSFER_VEHICLE_ASSIGNED;
+        getCurrentTimestamp(t.updatedAt, sizeof(t.updatedAt));
+        if (updateTransfer(&t)) sendJsonResponse(c, 200, "{\"success\":true,\"status\":\"VEHICLE_ASSIGNED\"}");
+        else sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update transfer\"}");
+        return;
+    }
+    if (actionLen == 6 && strncmp(action, "cancel", 6) == 0) {
+        transferTransition(c, hm, TRANSFER_CANCELLED, 1, "cancel");
+        return;
+    }
+    if (actionLen == 7 && strncmp(action, "checkin", 7) == 0) {
+        transferTransition(c, hm, TRANSFER_DRIVER_CHECKED_IN, 1, "checkin");
+        return;
+    }
+    if (actionLen == 4 && strncmp(action, "load", 4) == 0) {
+        transferTransition(c, hm, TRANSFER_LOADING, 1, "load");
+        return;
+    }
+    if (actionLen == 11 && strncmp(action, "record-load", 11) == 0) {
+        WasteTransfer t; int id = 0;
+        if (!transferFromBody(hm, &t, &id)) { sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}"); return; }
+        double w = 0; mg_json_get_num(hm->body, "$.actualLoadedWeightKg", &w);
+        char src[64] = "", reason[240] = "";
+        mg_json_unescape(hm->body, "$.measurementSource", src, sizeof(src));
+        mg_json_unescape(hm->body, "$.varianceReason", reason, sizeof(reason));
+        if (w <= 0) { sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"actualLoadedWeightKg is required\"}"); return; }
+        t.actualLoadedWeightKg = (float)w;
+        if (src[0]) snprintf(t.varianceExplanation, sizeof(t.varianceExplanation), "%s", src);
+        if (reason[0]) snprintf(t.varianceReason, sizeof(t.varianceReason), "%s", reason);
+        t.status = TRANSFER_LOADED;
+        getCurrentTimestamp(t.loadedAt, sizeof(t.loadedAt));
+        getCurrentTimestamp(t.updatedAt, sizeof(t.updatedAt));
+        int txId = 0;
+        if (t.sourceHubId > 0) {
+            HubInventoryTransaction tx;
+            memset(&tx, 0, sizeof(tx));
+            tx.hubId = t.sourceHubId;
+            snprintf(tx.transactionType, sizeof(tx.transactionType), "OUTBOUND_TRANSFER");
+            tx.quantityKg = (float)w;
+            snprintf(tx.wasteType, sizeof(tx.wasteType), "%s", t.wasteType);
+            snprintf(tx.sourceType, sizeof(tx.sourceType), "LOCAL_HUB");
+            tx.sourceId = t.sourceHubId;
+            snprintf(tx.destinationType, sizeof(tx.destinationType), "%s", t.destinationType);
+            tx.destinationId = t.destinationFacilityId;
+            char txErr[160] = "";
+            if (recordHubTransaction(&tx, 0, t.createdBy, txErr, sizeof(txErr))) txId = tx.transactionId;
+        }
+        t.outboundTransactionId = txId;
+        float varPct = calculateLoadVariancePct(t.plannedWeightKg, t.actualLoadedWeightKg);
+        if (updateTransfer(&t)) {
+            char buf[240];
+            snprintf(buf, sizeof(buf), "{\"success\":true,\"status\":\"LOADED\",\"outboundTransactionId\":%d,\"loadVariancePct\":%.2f}", txId, varPct);
+            sendJsonResponse(c, 200, buf);
+        } else {
+            sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update transfer\"}");
+        }
+        return;
+    }
+    if (actionLen == 6 && strncmp(action, "depart", 6) == 0) {
+        transferTransition(c, hm, TRANSFER_DEPARTED, 1, "depart");
+        return;
+    }
+    if (actionLen == 6 && strncmp(action, "arrive", 6) == 0) {
+        transferTransition(c, hm, TRANSFER_ARRIVED, 1, "arrive");
+        return;
+    }
+    if (actionLen == 15 && strncmp(action, "record-delivery", 15) == 0) {
+        WasteTransfer t; int id = 0;
+        if (!transferFromBody(hm, &t, &id)) { sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}"); return; }
+        double w = 0; mg_json_get_num(hm->body, "$.actualDeliveredWeightKg", &w);
+        char expl[260] = "";
+        mg_json_unescape(hm->body, "$.varianceExplanation", expl, sizeof(expl));
+        if (w < 0) { sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"actualDeliveredWeightKg is required\"}"); return; }
+        t.actualDeliveredWeightKg = (float)w;
+        if (expl[0]) snprintf(t.varianceExplanation, sizeof(t.varianceExplanation), "%s", expl);
+        t.status = TRANSFER_DELIVERED;
+        getCurrentTimestamp(t.updatedAt, sizeof(t.updatedAt));
+        float delVar = calculateDeliveryVarianceKg(t.actualLoadedWeightKg, t.actualDeliveredWeightKg);
+        if (updateTransfer(&t)) {
+            char buf[200];
+            snprintf(buf, sizeof(buf), "{\"success\":true,\"status\":\"DELIVERED\",\"deliveryVarianceKg\":%.2f}", delVar);
+            sendJsonResponse(c, 200, buf);
+        } else {
+            sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update transfer\"}");
+        }
+        return;
+    }
+    if (actionLen == 8 && strncmp(action, "complete", 8) == 0) {
+        WasteTransfer t; int id = 0;
+        if (!transferFromBody(hm, &t, &id)) { sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}"); return; }
+        // Allow completion from DELIVERED or LOADED (direct completion is not
+        // in the strict state machine; DELIVERED -> COMPLETED is).
+        if (t.status != TRANSFER_DELIVERED && t.status != TRANSFER_LOADED) {
+            char buf[200];
+            snprintf(buf, sizeof(buf), "{\"success\":false,\"message\":\"Cannot complete from %s\"}", transferStatusToStr(t.status));
+            sendJsonResponse(c, 400, buf);
+            return;
+        }
+        t.status = TRANSFER_COMPLETED;
+        getCurrentTimestamp(t.completedAt, sizeof(t.completedAt));
+        getCurrentTimestamp(t.updatedAt, sizeof(t.updatedAt));
+        if (t.driverId > 0) setDriverAvailability(t.driverId, "AVAILABLE", 0);
+        if (updateTransfer(&t)) sendJsonResponse(c, 200, "{\"success\":true,\"status\":\"COMPLETED\"}");
+        else sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update transfer\"}");
+        return;
+    }
+    if (actionLen == 5 && strncmp(action, "delay", 5) == 0) {
+        WasteTransfer t; int id = 0;
+        if (!transferFromBody(hm, &t, &id)) { sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}"); return; }
+        char reason[240] = "";
+        mg_json_unescape(hm->body, "$.reason", reason, sizeof(reason));
+        if (reason[0]) snprintf(t.varianceReason, sizeof(t.varianceReason), "%s", reason);
+        t.status = TRANSFER_DELAYED;
+        getCurrentTimestamp(t.updatedAt, sizeof(t.updatedAt));
+        if (updateTransfer(&t)) sendJsonResponse(c, 200, "{\"success\":true,\"status\":\"DELAYED\"}");
+        else sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to update transfer\"}");
+        return;
+    }
+    sendJsonResponse(c, 404, "{\"error\":\"Not found\"}");
+}
+
+static void handleGetMyTransfers(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    WasteTransfer list[100];
+    int count = getTransfersByDriver(u.userId, list, 100);
+    sendTransferList(c, list, count);
+}
+
+static void handleTransferAnalytics(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    WasteTransfer list[200];
+    int count = getAllTransfers(list, 200);
+    int completed = 0, inProgress = 0, cancelled = 0, failed = 0;
+    float totalPlanned = 0, totalDelivered = 0, totalVariance = 0;
+    int withLoad = 0;
+    for (int i = 0; i < count; i++) {
+        totalPlanned += list[i].plannedWeightKg;
+        totalDelivered += list[i].actualDeliveredWeightKg;
+        TransferStatus s = list[i].status;
+        if (s == TRANSFER_COMPLETED) completed++;
+        else if (s == TRANSFER_CANCELLED) cancelled++;
+        else if (s == TRANSFER_FAILED || s == TRANSFER_REJECTED) failed++;
+        else inProgress++;
+        if (list[i].actualLoadedWeightKg > 0) {
+            totalVariance += calculateLoadVariancePct(list[i].plannedWeightKg, list[i].actualLoadedWeightKg);
+            withLoad++;
+        }
+    }
+    char buf[400];
+    snprintf(buf, sizeof(buf),
+        "{\"totalTransfers\":%d,\"completed\":%d,\"inProgress\":%d,\"cancelled\":%d,\"failed\":%d,"
+        "\"totalWeightPlannedKg\":%.2f,\"totalWeightDeliveredKg\":%.2f,\"avgLoadVariancePct\":%.2f}",
+        count, completed, inProgress, cancelled, failed,
+        totalPlanned, totalDelivered, withLoad > 0 ? totalVariance / withLoad : 0.0f);
+    sendJsonResponse(c, 200, buf);
+}
+
+static void handleTransferChain(struct mg_connection *c, struct mg_http_message *hm) {
+    char idStr[32] = "";
+    mg_http_get_var(&hm->query, "transferId", idStr, sizeof(idStr));
+    WasteTransfer t;
+    if ((int)atoi(idStr) <= 0 || !getTransferById(atoi(idStr), &t)) {
+        sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}");
+        return;
+    }
+    JsonBuf jb;
+    jbInit(&jb, 1024);
+    int first = 1;
+    transferJsonEntry(&jb, &first, &t);
+    char buf[4096];
+    snprintf(buf, sizeof(buf), "{\"transfer\":%s}", jb.data);
+    jbFree(&jb);
+    sendJsonResponse(c, 200, buf);
+}
+
+// ── Recycling ────────────────────────────────────────────────
+static void handleRecyclingArrivals(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    WasteTransfer list[200];
+    int count = getAllTransfers(list, 200);
+    JsonBuf jb;
+    jbInit(&jb, 8192);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "{\"arrivals\":[");
+    int first = 1;
+    for (int i = 0; i < count; i++) {
+        if (list[i].status == TRANSFER_ARRIVED || list[i].status == TRANSFER_RECEIVING ||
+            list[i].status == TRANSFER_WEIGHT_VERIFICATION) {
+            transferJsonEntry(&jb, &first, &list[i]);
+        }
+    }
+    jbPuts(&jb, "]}");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void handleRecyclingAnalytics(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    RecyclingBatch list[200];
+    int count = getAllBatches(list, 200);
+    float input = 0, classified = 0, segregated = 0, processed = 0, recovered = 0, residual = 0;
+    int created = 0, completed = 0;
+    for (int i = 0; i < count; i++) {
+        input += list[i].inputWeightKg;
+        processed += list[i].processedWeightKg;
+        recovered += list[i].recoveredWeightKg;
+        residual += list[i].residualWeightKg;
+        if (list[i].status == BATCH_COMPLETED) completed++;
+        else created++;
+        WasteClassification wc[50];
+        int wn = getBatchesClassifications(list[i].batchId, wc, 50);
+        for (int j = 0; j < wn; j++) classified += wc[j].weightKg;
+        segregated += list[i].processedWeightKg > 0 ? list[i].processedWeightKg : 0;
+    }
+    char buf[500];
+    snprintf(buf, sizeof(buf),
+        "{\"totalInputKg\":%.2f,\"totalClassifiedKg\":%.2f,\"totalSegregatedKg\":%.2f,"
+        "\"totalProcessedKg\":%.2f,\"totalRecoveredKg\":%.2f,\"totalResidualKg\":%.2f,"
+        "\"recoveryRatePct\":%.2f,\"batchCount\":%d,\"completedBatches\":%d,\"pendingBatches\":%d}",
+        input, classified, segregated, processed, recovered, residual,
+        input > 0 ? (recovered / input) * 100.0f : 0.0f, count, completed, created);
+    sendJsonResponse(c, 200, buf);
+}
+
+static void handleRecyclingAction(struct mg_connection *c, struct mg_http_message *hm) {
+    User u;
+    if (!getAuthenticatedUser(hm, &u)) { sendJsonError(c, 401, "Unauthorized"); return; }
+    const char *uri = "/api/recycling/";
+    int prefixLen = (int)strlen(uri);
+    if (hm->uri.len < (size_t)prefixLen) { sendJsonResponse(c, 404, "{\"error\":\"Not found\"}"); return; }
+    const char *action = hm->uri.buf + prefixLen;
+    size_t actionLen = hm->uri.len - (size_t)prefixLen;
+
+    double num = 0;
+    if (actionLen == 7 && strncmp(action, "receive", 7) == 0) {
+        double fId = 0;
+        mg_json_get_num(hm->body, "$.transferId", &num);
+        mg_json_get_num(hm->body, "$.facilityId", &fId);
+        if (receiveTransferAtFacility((int)num, (int)fId, u.userId))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to receive transfer\"}");
+        return;
+    }
+    if (actionLen == 6 && strncmp(action, "weight", 6) == 0) {
+        double w = 0;
+        mg_json_get_num(hm->body, "$.transferId", &num);
+        mg_json_get_num(hm->body, "$.receivedWeightKg", &w);
+        char src[64] = "";
+        mg_json_unescape(hm->body, "$.measurementSource", src, sizeof(src));
+        if (recordReceivedWeight((int)num, (float)w, src[0] ? src : "WEIGHBRIDGE", u.userId, 10.0f))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to record received weight\"}");
+        return;
+    }
+    if (actionLen == 6 && strncmp(action, "accept", 6) == 0) {
+        mg_json_get_num(hm->body, "$.transferId", &num);
+        if (processTransferDecision((int)num, "ACCEPT", "", u.userId))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to accept transfer\"}");
+        return;
+    }
+    if (actionLen == 6 && strncmp(action, "reject", 6) == 0) {
+        char reason[240] = "";
+        mg_json_unescape(hm->body, "$.reason", reason, sizeof(reason));
+        mg_json_get_num(hm->body, "$.transferId", &num);
+        if (processTransferDecision((int)num, "REJECT", reason, u.userId))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to reject transfer\"}");
+        return;
+    }
+    if (actionLen == 10 && strncmp(action, "quarantine", 10) == 0) {
+        char reason[240] = "";
+        mg_json_unescape(hm->body, "$.reason", reason, sizeof(reason));
+        mg_json_get_num(hm->body, "$.transferId", &num);
+        if (processTransferDecision((int)num, "QUARANTINE", reason, u.userId))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to quarantine transfer\"}");
+        return;
+    }
+    if (actionLen == 7 && strncmp(action, "batches", 7) == 0) {
+        // Sub-paths: /batches/* handled below; plain POST /batches = create.
+        if (actionLen == 7) {
+            double fId = 0, inKg = 0;
+            mg_json_get_num(hm->body, "$.transferId", &num);
+            mg_json_get_num(hm->body, "$.facilityId", &fId);
+            mg_json_get_num(hm->body, "$.inputWeightKg", &inKg);
+            WasteTransfer t;
+            if (!getTransferById((int)num, &t)) {
+                sendJsonResponse(c, 404, "{\"success\":false,\"message\":\"Transfer not found\"}");
+                return;
+            }
+            RecyclingBatch b;
+            memset(&b, 0, sizeof(b));
+            b.facilityId = (int)fId;
+            b.sourceTransferId = (int)num;
+            b.sourceHubId = t.sourceHubId;
+            b.inputWeightKg = (float)inKg;
+            snprintf(b.workspaceId, sizeof(b.workspaceId), "%s", g_current_workspace);
+            if (!createRecyclingBatch(&b)) {
+                sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to create batch\"}");
+                return;
+            }
+            if (b.batchCode[0] == '\0') {
+                snprintf(b.batchCode, sizeof(b.batchCode), "BAT-%05d", b.batchId);
+                updateBatch(&b);
+            }
+            char buf[160];
+            snprintf(buf, sizeof(buf), "{\"success\":true,\"batchId\":%d}", b.batchId);
+            sendJsonResponse(c, 200, buf);
+            return;
+        }
+        // /batches/complete
+        const char *sub = action + 7;
+        size_t subLen = actionLen - 7;
+        if (subLen == 8 && strncmp(sub, "/complete", 8) == 0) {
+            mg_json_get_num(hm->body, "$.batchId", &num);
+            if (completeRecyclingBatch((int)num, u.userId))
+                sendJsonResponse(c, 200, "{\"success\":true}");
+            else
+                sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to complete batch\"}");
+            return;
+        }
+    }
+    if (actionLen == 8 && strncmp(action, "classify", 8) == 0) {
+        double w = 0;
+        mg_json_get_num(hm->body, "$.batchId", &num);
+        mg_json_get_num(hm->body, "$.weightKg", &w);
+        char wt[64] = "";
+        mg_json_unescape(hm->body, "$.wasteType", wt, sizeof(wt));
+        WasteClassification wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.batchId = (int)num;
+        snprintf(wc.wasteType, sizeof(wc.wasteType), "%s", wt);
+        wc.weightKg = (float)w;
+        wc.operatorId = u.userId;
+        RecyclingBatch b;
+        if (getBatchById((int)num, &b)) {
+            b.status = BATCH_CLASSIFIED;
+            updateBatch(&b);
+        }
+        if (addWasteClassification(&wc))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to add classification\"}");
+        return;
+    }
+    if (actionLen == 9 && strncmp(action, "segregate", 9) == 0) {
+        double inW = 0, outW = 0;
+        mg_json_get_num(hm->body, "$.batchId", &num);
+        mg_json_get_num(hm->body, "$.inputWeightKg", &inW);
+        mg_json_get_num(hm->body, "$.outputWeightKg", &outW);
+        char wt[64] = "";
+        mg_json_unescape(hm->body, "$.wasteType", wt, sizeof(wt));
+        SegregationRecord sr;
+        memset(&sr, 0, sizeof(sr));
+        sr.batchId = (int)num;
+        sr.inputWeightKg = (float)inW;
+        sr.outputWeightKg = (float)outW;
+        snprintf(sr.wasteType, sizeof(sr.wasteType), "%s", wt);
+        sr.operatorId = u.userId;
+        RecyclingBatch b;
+        if (getBatchById((int)num, &b)) {
+            b.status = BATCH_PROCESSING;
+            updateBatch(&b);
+        }
+        if (addSegregationRecord(&sr))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to add segregation record\"}");
+        return;
+    }
+    if (actionLen == 7 && strncmp(action, "process", 7) == 0) {
+        double inW = 0, outW = 0;
+        mg_json_get_num(hm->body, "$.batchId", &num);
+        mg_json_get_num(hm->body, "$.inputWeightKg", &inW);
+        mg_json_get_num(hm->body, "$.outputWeightKg", &outW);
+        char method[80] = "";
+        mg_json_unescape(hm->body, "$.processingMethod", method, sizeof(method));
+        ProcessingRecord pr;
+        memset(&pr, 0, sizeof(pr));
+        pr.batchId = (int)num;
+        snprintf(pr.processingMethod, sizeof(pr.processingMethod), "%s", method[0] ? method : "MECHANICAL");
+        pr.operatorId = u.userId;
+        pr.inputWeightKg = (float)inW;
+        pr.outputWeightKg = (float)outW;
+        RecyclingBatch b;
+        if (getBatchById((int)num, &b)) {
+            b.processedWeightKg = (float)outW;
+            b.status = BATCH_PROCESSED;
+            updateBatch(&b);
+        }
+        if (addProcessingRecord(&pr))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to add processing record\"}");
+        return;
+    }
+    if (actionLen == 8 && strncmp(action, "recovery", 8) == 0) {
+        double w = 0;
+        mg_json_get_num(hm->body, "$.batchId", &num);
+        mg_json_get_num(hm->body, "$.weightKg", &w);
+        char mt[64] = "", grade[40] = "", dest[140] = "";
+        mg_json_unescape(hm->body, "$.materialType", mt, sizeof(mt));
+        mg_json_unescape(hm->body, "$.qualityGrade", grade, sizeof(grade));
+        mg_json_unescape(hm->body, "$.destination", dest, sizeof(dest));
+        RecoveryRecord rr;
+        memset(&rr, 0, sizeof(rr));
+        rr.batchId = (int)num;
+        snprintf(rr.materialType, sizeof(rr.materialType), "%s", mt);
+        rr.weightKg = (float)w;
+        snprintf(rr.qualityGrade, sizeof(rr.qualityGrade), "%s", grade);
+        snprintf(rr.destination, sizeof(rr.destination), "%s", dest);
+        rr.operatorId = u.userId;
+        RecyclingBatch b;
+        if (getBatchById((int)num, &b)) {
+            b.recoveredWeightKg = (float)w;
+            b.status = BATCH_RECOVERED;
+            updateBatch(&b);
+        }
+        if (addRecoveryRecord(&rr))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to add recovery record\"}");
+        return;
+    }
+    if (actionLen == 8 && strncmp(action, "residual", 8) == 0) {
+        double w = 0;
+        mg_json_get_num(hm->body, "$.batchId", &num);
+        mg_json_get_num(hm->body, "$.weightKg", &w);
+        char cat[80] = "", reason[240] = "", dest[140] = "", method[80] = "";
+        mg_json_unescape(hm->body, "$.category", cat, sizeof(cat));
+        mg_json_unescape(hm->body, "$.reason", reason, sizeof(reason));
+        mg_json_unescape(hm->body, "$.destination", dest, sizeof(dest));
+        mg_json_unescape(hm->body, "$.disposalMethod", method, sizeof(method));
+        ResidualRecord rr;
+        memset(&rr, 0, sizeof(rr));
+        rr.batchId = (int)num;
+        rr.weightKg = (float)w;
+        snprintf(rr.category, sizeof(rr.category), "%s", cat);
+        snprintf(rr.reason, sizeof(rr.reason), "%s", reason);
+        snprintf(rr.destination, sizeof(rr.destination), "%s", dest);
+        snprintf(rr.disposalMethod, sizeof(rr.disposalMethod), "%s", method);
+        rr.operatorId = u.userId;
+        RecyclingBatch b;
+        if (getBatchById((int)num, &b)) {
+            b.residualWeightKg = (float)w;
+            updateBatch(&b);
+        }
+        if (addResidualRecord(&rr))
+            sendJsonResponse(c, 200, "{\"success\":true}");
+        else
+            sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"Failed to add residual record\"}");
+        return;
+    }
+    sendJsonResponse(c, 404, "{\"error\":\"Not found\"}");
+}
+
+// ── GIS (real responses instead of canned messages) ──────────
+static void handleGisNearby(struct mg_connection *c, struct mg_http_message *hm) {
+    char latStr[32] = "", lonStr[32] = "", radiusStr[32] = "";
+    mg_http_get_var(&hm->query, "lat", latStr, sizeof(latStr));
+    mg_http_get_var(&hm->query, "lon", lonStr, sizeof(lonStr));
+    mg_http_get_var(&hm->query, "radius", radiusStr, sizeof(radiusStr));
+    double lat = atof(latStr), lon = atof(lonStr);
+    double radius = atof(radiusStr);
+    if (radius == 0.0) radius = 5.0;
+    if (lat == 0.0 && lon == 0.0) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"lat and lon are required\"}");
+        return;
+    }
+    LocalHub hubs[10];
+    double distances[10];
+    int count = findNearestHubs(lat, lon, radius, hubs, distances, 10);
+    JsonBuf jb;
+    jbInit(&jb, 4096);
+    if (!jb.data) { sendJsonError(c, 500, "OOM"); return; }
+    jbPuts(&jb, "[");
+    int first = 1;
+    for (int i = 0; i < count; i++) {
+        char nm[128];
+        jsonStr(nm, sizeof(nm), hubs[i].name);
+        char entry[400];
+        int n = snprintf(entry, sizeof(entry),
+            "%s{\"hubId\":%d,\"name\":\"%s\",\"distanceKm\":%.2f,\"address\":\"%s\","
+            "\"status\":\"%s\",\"currentLoadKg\":%.2f,\"maximumCapacityKg\":%.2f}",
+            first ? "" : ",", hubs[i].hubId, nm, distances[i], hubs[i].address,
+            hubStatusToStr(hubs[i].status), calculateHubCurrentLoad(hubs[i].hubId),
+            hubs[i].maximumCapacityKg);
+        jbAppend(&jb, entry, (size_t)n);
+        first = 0;
+    }
+    jbPuts(&jb, "]");
+    sendJsonResponse(c, 200, jb.data);
+    jbFree(&jb);
+}
+
+static void handleGisRoutes(struct mg_connection *c, struct mg_http_message *hm) {
+    char fromLatStr[32] = "", fromLonStr[32] = "", toLatStr[32] = "", toLonStr[32] = "";
+    mg_http_get_var(&hm->query, "fromLat", fromLatStr, sizeof(fromLatStr));
+    mg_http_get_var(&hm->query, "fromLon", fromLonStr, sizeof(fromLonStr));
+    mg_http_get_var(&hm->query, "toLat", toLatStr, sizeof(toLatStr));
+    mg_http_get_var(&hm->query, "toLon", toLonStr, sizeof(toLonStr));
+    double fromLat = atof(fromLatStr), fromLon = atof(fromLonStr);
+    double toLat = atof(toLatStr), toLon = atof(toLonStr);
+    if ((fromLat == 0 && fromLon == 0) || (toLat == 0 && toLon == 0)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"fromLat/fromLon/toLat/toLon are required\"}");
+        return;
+    }
+    GeoCoordinate origin = { fromLat, fromLon };
+    GeoCoordinate dest = { toLat, toLon };
+    RouteEstimate est;
+    if (!getRouteEstimate(&origin, &dest, &est)) {
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Could not compute route\"}");
+        return;
+    }
+    char buf[300];
+    snprintf(buf, sizeof(buf),
+        "{\"success\":true,\"usingFallback\":%s,\"distanceKm\":%.2f,\"estimatedTimeMin\":%.2f,"
+        "\"steps\":[{\"lat\":%.6f,\"lon\":%.6f},{\"lat\":%.6f,\"lon\":%.6f}]}",
+        est.usingFallback ? "true" : "false", est.distanceKm, est.estimatedTimeMin,
+        fromLat, fromLon, toLat, toLon);
+    sendJsonResponse(c, 200, buf);
+}
+
+static void handleGisPost(struct mg_connection *c, struct mg_http_message *hm) {
+    double vId = 0, lat = 0, lon = 0;
+    mg_json_get_num(hm->body, "$.vehicleId", &vId);
+    mg_json_get_num(hm->body, "$.latitude", &lat);
+    mg_json_get_num(hm->body, "$.longitude", &lon);
+    if ((int)vId <= 0 || (lat == 0.0 && lon == 0.0)) {
+        sendJsonResponse(c, 400, "{\"success\":false,\"message\":\"vehicleId, latitude and longitude are required\"}");
+        return;
+    }
+    VehicleLocation loc;
+    memset(&loc, 0, sizeof(loc));
+    loc.vehicleId = (int)vId;
+    loc.latitude = lat;
+    loc.longitude = lon;
+    snprintf(loc.workspaceId, sizeof(loc.workspaceId), "%s", g_current_workspace);
+    if (recordVehicleLocation(&loc))
+        sendJsonResponse(c, 200, "{\"success\":true}");
+    else
+        sendJsonResponse(c, 500, "{\"success\":false,\"message\":\"Failed to record vehicle location\"}");
+}
 
 // Routes that are reachable without a session token. Everything else under
 // /api/ requires a valid Bearer session.
@@ -3098,13 +4597,32 @@ static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
     else if (isGet  && mg_match(hm->uri, mg_str("/api/backups"), NULL))                handleGetBackups(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/backups"), NULL))                handleCreateBackup(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/archives"), NULL))               handleGetArchives(c, hm);
-else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/all"), NULL))        handleGetAllCollections(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/all"), NULL))        handleGetAllCollections(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/resident"), NULL))   handleCollectionResident(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/cleaner"), NULL))    handleCollectionCleaner(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/collections/hub"), NULL))        handleGetCollectionsByHub(c, hm);
     else if (isPost && mg_match(hm->uri, mg_str("/api/collections/*"), NULL))          handleCollectionAction(c, hm);
 else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))              handleGetAllTransfers(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/transfers"), NULL))              handleCreateTransferAPI(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers/my"), NULL))           handleGetMyTransfers(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers/analytics"), NULL))    handleTransferAnalytics(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers/chain"), NULL))        handleTransferChain(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/transfers/*"), NULL))            handleTransferAction(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/facilities"), NULL))   handleGetAllFacilities(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/batches"), NULL))      handleGetRecyclingBatches(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/arrivals"), NULL))     handleRecyclingArrivals(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/recycling/analytics"), NULL))    handleRecyclingAnalytics(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/recycling/*"), NULL))            handleRecyclingAction(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/facilities"), NULL))             handleGetFacilitiesList(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/facilities"), NULL))             handleCreateFacility(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/drivers"), NULL))                handleGetDriversList(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/drivers/available"), NULL))      handleGetAvailableDriversList(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/drivers/my-assignment"), NULL))  handleGetMyDriverAssignment(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/drivers/profile"), NULL))        handleSaveDriverProfile(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/vehicles/available"), NULL))     handleGetAvailableVehicles(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/vehicles/hub"), NULL))           handleGetHubVehicles(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/vehicles/update"), NULL))        handleUpdateVehicle(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/vehicles/setstatus"), NULL))     handleSetVehicleStatus(c, hm);
 
     else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/locations"), NULL)) {
         GeoLocation list[100];
@@ -3149,15 +4667,9 @@ else if (isGet  && mg_match(hm->uri, mg_str("/api/transfers"), NULL))           
         sendJsonResponse(c, 200, json);
         free(json);
     }
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/nearby"), NULL)) {
-        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Nearby fetched\"}");
-    }
-    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/routes"), NULL)) {
-        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Routes fetched\"}");
-    }
-    else if (isPost && mg_match(hm->uri, mg_str("/api/gis/*"), NULL)) {
-        sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"GIS Action\"}");
-    }
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/nearby"), NULL))         handleGisNearby(c, hm);
+    else if (isGet  && mg_match(hm->uri, mg_str("/api/gis/routes"), NULL))         handleGisRoutes(c, hm);
+    else if (isPost && mg_match(hm->uri, mg_str("/api/gis/*"), NULL))              handleGisPost(c, hm);
 
     else if (isGet  && mg_match(hm->uri, mg_str("/api/bins"), NULL))                   handleGetBins(c, hm);
     else if (isGet  && mg_match(hm->uri, mg_str("/api/vehicles"), NULL))               handleGetVehicles(c, hm);
