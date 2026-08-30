@@ -6,7 +6,8 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/tests/.smoke"
 BIN="$ROOT/server.exe"
-PORT="${SMOKE_PORT:-18081}"
+# Unique per-run port so a leftover server from a previous run can never be hit
+PORT=$((18081 + RANDOM % 1000))
 BASE="http://127.0.0.1:$PORT"
 PASS=0
 FAIL=0
@@ -39,12 +40,20 @@ check_contains() { # check_contains <name> <part> <actual>
 status_of() { curl -s -o /dev/null -w "%{http_code}" "$@"; }
 
 # ── Prepare isolated data copy ──────────────────────────────────────────
+# Kill any leftover smoke server from a previous run (scoped to this dir).
+pkill -f "^$WORK/server" 2>/dev/null || true
+sleep 0.2
+
 rm -rf "$WORK"
 mkdir -p "$WORK/data"
 cp "$ROOT"/data/*.dat "$WORK/data/" 2>/dev/null || true
 cp "$BIN" "$WORK/server"
 
-cd "$WORK"
+cd "$WORK" || { echo "ERROR: cannot cd to $WORK"; exit 1; }
+# NEVER let the server run with the repository as its cwd - writes must stay
+# inside $WORK.
+if [ "$(pwd)" != "$WORK" ]; then echo "ERROR: cwd is not $WORK"; exit 1; fi
+
 PORT="$PORT" ./server > server.log 2>&1 &
 SRV_PID=$!
 
