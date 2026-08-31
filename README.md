@@ -1,65 +1,47 @@
-# Smart Waste Collection and Recycling Monitoring System
+# Smart Waste — Real-World Waste Management Platform
 
-## Overview
-A comprehensive C console-based simulation for a smart waste management system. It manages the complete lifecycle from waste reporting and smart-bin overflow alerts to collection route optimization (using Dijkstra's Algorithm) and recycling rewards (Eco Points).
+This repo has two generations of the system:
 
-## Features
-- **Authentication**: Role-based access control (Admin, Collection Manager, Operator, Resident).
-- **Resident Management**: Track addresses and Eco Points.
-- **Waste Management**: Record different types of waste (Plastic, Paper, Metal, E-Waste, Biodegradable, Hazardous, Mixed).
-- **Smart Bins**: Simulated capacity and fill-level monitoring with auto-status updates (Normal, Warning, Critical, Overflow).
-- **Alert System**: Auto-generation of alerts for critical bin levels or full vehicles.
-- **Priority Engine & Queue**: Calculates collection priority based on fill level, waste type, waiting days, and area density.
-- **Vehicle Assignment**: Auto-selects the smallest suitable available vehicle.
-- **Route Optimization**: Uses Dijkstra's Shortest Path Algorithm to calculate the optimal route from the depot to the bin.
-- **Collection Workflow**: Tracks status from Pending -> Assigned -> Collecting -> Completed.
-- **Recycling & Rewards**: Calculates recycling efficiency and recovery value. Awards Eco Points to residents.
-- **Dashboard & Reports**: Live statistics and waste category breakdowns.
-- **Data Persistence**: Binary file handling with built-in backup and restore functionality.
+## Current platform (active)
 
-## System Architecture & Data Structures
-- **Binary Persistence**: `.dat` files for Users, Residents, Waste, Bins, Vehicles, Collections, Recycling, and Alerts.
-- **Priority Queue**: Implemented via descending sorts on collection scores.
-- **Graph**: Adjacency matrix for locations to simulate GPS routing.
-- **Search & Sort**: Linear/Binary search and Quick/Selection sorts.
+- **`backend/`** — Node/Express + embedded Postgres (`@electric-sql/pglite`) business-logic
+  server. This is the real system of record: admin-provisioned staff accounts, Google-only
+  resident sign-in, local collection hubs with live capacity, cleaner collections, resident
+  pickup requests with a real missed-pickup escalation engine, QR-gated driver dispatch
+  (assign → scan to go on-the-job → scan at hub → scan again with real loaded weight →
+  scan at recycling facility → manual received-weight confirmation), and recycling batch
+  classification/processing — all backed by real logged numbers, never fabricated data.
+  See **`backend/README.md`** for the full API reference and architecture rationale.
+- **`frontend/`** — React + Vite + Tailwind UI wired to the new backend. Login is a
+  slider between staff-role panels (admin-issued credentials) and a Google-only resident
+  panel — no "Login"/"Demo" tabs. Every role lands on a dashboard built for their job:
+  Admin oversight, Local Hub Manager, Recycling ("Recycle Commander"), Cleaner field ops,
+  Driver QR scanning flow, and Resident pickup requests.
 
-## Installation & Compilation
-This project uses standard C libraries and is compatible with GCC. 
+### Running the current platform
 
 ```bash
-# Compile using the provided Makefile
-make all
+# 1. Backend (Postgres + API), first time only creates the bootstrap admin:
+cd backend
+npm install
+node src/db/seed.js      # prints the bootstrap admin username/password
+npm start                # listens on :8081
 
-# Or compile manually via GCC
-gcc -fno-lto src/*.c -Iinclude -Wall -Wextra -o smart_waste.exe
+# 2. Frontend
+cd frontend
+npm install
+npm run dev              # listens on :3000, proxies /api -> :8081
 ```
 
-## Execution
-```bash
-./smart_waste.exe
-```
-Upon the first launch, the system automatically initializes all binary data files with default sample data.
+Log in as the bootstrap admin, change the password when prompted, then use
+**Staff & Accounts** to create hub managers, cleaners, recycling managers,
+and drivers — no other account creation path exists for staff.
 
-## Default Credentials
-| Role               | Username     | Password |
-|--------------------|--------------|----------|
-| Admin              | `admin01`    | `pass123`|
-| Collection Manager | `manager01`  | `pass123`|
-| Operator           | `operator01` | `pass123`|
-| Resident           | `resident01` | `pass123`|
+## Legacy platform (retired)
 
-## Demo Workflow
-1. Log in as `admin01` -> View Overall Dashboard and Backup Data.
-2. The initial data contains simulated Bins and Waste, causing auto-alerts.
-3. (Additional menus for Manager and Operator can be wired up for full step-by-step simulations).
-
-## Limitations (Academic Simulation)
-- **Sensors**: Smart-bin fill levels are simulated via manual waste additions.
-- **GPS**: Route optimization uses a fixed graph distance rather than real-time traffic APIs.
-- **Storage**: Uses binary flat-files instead of an SQL database.
-- **Security**: Passwords are in plain-text suitable for academic demonstration, not production.
-
-## Future Enhancements
-- Integration with real IoT ultrasonic sensors (e.g., via Arduino/Raspberry Pi).
-- Live Google Maps API integration for real-time fleet tracking.
-- Web-based municipal dashboard.
+The original `src/*.c` / `Makefile` / `server.exe` C+Mongoose backend that shipped with
+this repo is **retired** in favor of the Node/Postgres backend above — it modeled "smart
+bins" and a much simpler workflow that doesn't match the real-world hub → dispatch →
+recycling business model now in place. The C source is kept in git history for reference
+but is no longer built or run as part of the active app. See earlier commits in this
+repo's history if you need the original academic-simulation README and credentials table.
