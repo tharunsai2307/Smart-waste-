@@ -15,10 +15,25 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       token: null,
       user: null,
-      setSession: (token, user) => set({ token, user }),
+      setSession: (token, user) => {
+        // eslint-disable-next-line no-console
+        console.info('[auth] setSession called', { role: user?.role, mustChangePassword: user?.mustChangePassword });
+        set({ token, user });
+      },
       updateUser: (patch) => set((s) => ({ user: s.user ? { ...s.user, ...patch } : s.user })),
-      logout: () => set({ token: null, user: null }),
+      logout: () => {
+        // eslint-disable-next-line no-console
+        console.warn('[auth] logout() called', new Error('logout stack trace').stack);
+        set({ token: null, user: null });
+      },
     }),
-    { name: 'smart-waste-auth' }
+    {
+      name: 'smart-waste-auth',
+      onRehydrateStorage: () => (state, error) => {
+        // eslint-disable-next-line no-console
+        if (error) console.error('[auth] failed to rehydrate persisted session', error);
+        else console.info('[auth] rehydrated persisted session', { hasToken: !!state?.token, hasUser: !!state?.user });
+      },
+    }
   )
 );

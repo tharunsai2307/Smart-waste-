@@ -28,6 +28,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     if (res.status === 401) {
+      // eslint-disable-next-line no-console
+      console.warn(`[auth] 401 from ${path} — logging out. Response body:`, body);
       useAuthStore.getState().logout();
     }
     throw new ApiError(body?.error || `Request failed (${res.status})`, res.status);
