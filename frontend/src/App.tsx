@@ -23,7 +23,11 @@ const queryClient = new QueryClient({
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token, user } = useAuthStore();
-  if (!token || !user) return <Navigate to="/login" replace />;
+  if (!token || !user) {
+    // eslint-disable-next-line no-console
+    console.warn('[route-guard] Redirecting to /login — token or user missing.', { hasToken: !!token, hasUser: !!user });
+    return <Navigate to="/login" replace />;
+  }
   if (user.mustChangePassword) return <Navigate to="/force-password-change" replace />;
   if (user.role === 'RESIDENT' && !user.profileComplete) return <Navigate to="/complete-profile" replace />;
   return <>{children}</>;
