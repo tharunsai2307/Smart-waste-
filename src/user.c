@@ -1,6 +1,26 @@
 #include "user.h"
 #include "utils.h"
 
+// Seeds a single demo/default account (used the first time the users
+// data file is created) if it does not already exist.
+static void seedDefaultUser(const char *username, const char *name,
+                             const char *password, UserRole role) {
+    User temp;
+    if (getUserByUsername(username, &temp)) return; // Already exists
+
+    User u;
+    memset(&u, 0, sizeof(User));
+    strncpy(u.username, username, sizeof(u.username) - 1);
+    strncpy(u.name, name, sizeof(u.name) - 1);
+    strncpy(u.password, password, sizeof(u.password) - 1);
+    u.role = role;
+    u.status = 1;
+    u.failedAttempts = 0;
+    u.requiresPasswordChange = 0;
+
+    addUser(&u);
+}
+
 void initUsersData() {
     FILE *fp = fopen(USERS_FILE, "rb");
     if (fp == NULL) {
@@ -12,7 +32,8 @@ void initUsersData() {
         fclose(fp);
     }
 
-    // Ensure master admin exists
+    // Master admin — the primary break-glass account used by --create-admin
+    // and the CLI. Kept separate from the demo accounts below.
     User admin;
     int exists = 0;
     fp = fopen(USERS_FILE, "rb");
@@ -41,6 +62,15 @@ void initUsersData() {
         addUser(&admin);
         printf("Master admin created.\n");
     }
+
+    // Seed the demo accounts documented in README.md ("Default Credentials")
+    // so a fresh checkout (or an existing data file that predates these
+    // accounts) can always log in with the credentials the docs advertise.
+    // seedDefaultUser() is idempotent (skips accounts that already exist).
+    seedDefaultUser("admin01", "Admin User", "pass123", ROLE_ADMIN);
+    seedDefaultUser("manager01", "Collection Manager", "pass123", ROLE_LOCAL_HUB_MANAGER);
+    seedDefaultUser("operator01", "Field Operator", "pass123", ROLE_CLEANER);
+    seedDefaultUser("resident01", "Demo Resident", "pass123", ROLE_RESIDENT);
 }
 
 #include <stdint.h>
@@ -163,11 +193,29 @@ int addUser(const User *newUser) {
     if (getUserByUsername(newUser->username, &temp)) {
         return 0; // Username exists
     }
-    
+
+    User u = *newUser;
+
+    // Auto-assign a unique userId when the caller didn't provide one.
+    // updateUser()/deleteUser() match records solely by userId, so leaving
+    // this at 0 (or duplicated) would cause every zero-id record to collide
+    // and get silently overwritten the next time any one of them logs in.
+    if (u.userId <= 0) {
+        int maxId = 0;
+        FILE *scan = fopen(USERS_FILE, "rb");
+        if (scan) {
+            User t;
+            while (fread(&t, sizeof(User), 1, scan) == 1) {
+                if (t.userId > maxId) maxId = t.userId;
+            }
+            fclose(scan);
+        }
+        u.userId = maxId + 1;
+    }
+
     FILE *fp = fopen(USERS_FILE, "ab");
     if (fp == NULL) return 0;
-    
-    User u = *newUser;
+
     if (strlen(u.password) > 0) {
         char hashed[100] = {0};
         hashPassword(newUser->password, hashed);
