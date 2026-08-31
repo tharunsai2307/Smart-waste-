@@ -7,6 +7,11 @@
 
 #define WORKSPACES_FILE "data/workspaces.dat"
 
+// Currently active workspace context for the running request/session.
+// Defined here (rather than in server.c) so both the CLI (smart_waste.exe)
+// and the HTTP server (server.exe) targets share a single definition.
+char g_current_workspace[37] = {0};
+
 static void generateUuid(char *out) {
     srand((unsigned int)time(NULL));
     sprintf(out, "%04x%04x-%04x-%04x-%04x-%04x%04x%04x",

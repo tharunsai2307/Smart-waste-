@@ -2106,10 +2106,6 @@ static void handlePostAction(struct mg_connection *c, struct mg_http_message *hm
     sendJsonResponse(c, 200, "{\"success\":true,\"message\":\"Generic post action processed\"}");
 }
 
-char g_current_workspace[37] = {0};
-
-
-
 static void eventHandler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev != MG_EV_HTTP_MSG) return;
     struct mg_http_message *hm = (struct mg_http_message *)ev_data;
