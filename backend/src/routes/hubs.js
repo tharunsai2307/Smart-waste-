@@ -32,6 +32,8 @@ router.post('/local', authRequired, requireRole('ADMIN'), async (req, res) => {
   );
 
   if (p.managerId) {
+    // Sync both directions: the hub points to the manager, and the manager's
+    // local_hub_id points back to this hub.
     await query(`UPDATE users SET local_hub_id = $1 WHERE id = $2 AND role = 'LOCAL_HUB_MANAGER'`, [hub.id, p.managerId]);
   }
   res.status(201).json({ hub });
@@ -69,6 +71,8 @@ router.get('/local/:id', authRequired, async (req, res) => {
 });
 
 /** Local hub manager updates capacity / assigns a manager (admin only for manager reassignment). */
+const VEHICLE_STATUSES = ['IDLE', 'ASSIGNED', 'EN_ROUTE', 'MAINTENANCE', 'OUT_OF_SERVICE'];
+
 router.patch('/local/:id', authRequired, requireRole('ADMIN', 'LOCAL_HUB_MANAGER'), async (req, res) => {
   const hubId = Number(req.params.id);
   if (req.user.role === 'LOCAL_HUB_MANAGER' && req.user.localHubId !== hubId) {
@@ -77,13 +81,26 @@ router.patch('/local/:id', authRequired, requireRole('ADMIN', 'LOCAL_HUB_MANAGER
   const fields = [];
   const values = [];
   let idx = 1;
-  if (req.body.capacityKg !== undefined) { fields.push(`capacity_kg = $${idx++}`); values.push(req.body.capacityKg); }
-  if (req.body.warningPct !== undefined) { fields.push(`warning_pct = $${idx++}`); values.push(req.body.warningPct); }
-  if (req.body.criticalPct !== undefined) { fields.push(`critical_pct = $${idx++}`); values.push(req.body.criticalPct); }
+  if (req.body.capacityKg !== undefined) {
+    const v = Number(req.body.capacityKg);
+    if (!v || v <= 0) return res.status(400).json({ error: 'capacityKg must be positive' });
+    fields.push(`capacity_kg = $${idx++}`); values.push(v);
+  }
+  if (req.body.warningPct !== undefined) {
+    const v = Number(req.body.warningPct);
+    if (v < 0 || v > 100) return res.status(400).json({ error: 'warningPct must be 0-100' });
+    fields.push(`warning_pct = $${idx++}`); values.push(v);
+  }
+  if (req.body.criticalPct !== undefined) {
+    const v = Number(req.body.criticalPct);
+    if (v < 0 || v > 100) return res.status(400).json({ error: 'criticalPct must be 0-100' });
+    fields.push(`critical_pct = $${idx++}`); values.push(v);
+  }
   if (req.user.role === 'ADMIN' && req.body.managerId !== undefined) { fields.push(`manager_id = $${idx++}`); values.push(req.body.managerId); }
   if (!fields.length) return res.status(400).json({ error: 'No updatable fields provided' });
   values.push(hubId);
   const hub = await one(`UPDATE local_hubs SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`, values);
+  if (!hub) return res.status(404).json({ error: 'Hub not found' });
   res.json({ hub });
 });
 
@@ -111,6 +128,7 @@ router.post('/recycling', authRequired, requireRole('ADMIN'), async (req, res) =
     [code, p.name, p.address || null, p.latitude || null, p.longitude || null, p.dailyCapacityKg, p.managerId || null, qr]
   );
   if (p.managerId) {
+    // Sync both directions for recycling hub manager assignment.
     await query(`UPDATE users SET recycling_hub_id = $1 WHERE id = $2 AND role = 'RECYCLING_MANAGER'`, [hub.id, p.managerId]);
   }
   res.status(201).json({ hub });

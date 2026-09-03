@@ -15,6 +15,8 @@ const staffLoginSchema = z.object({
   password: z.string().min(1),
 });
 
+const MAX_FAILED_ATTEMPTS = 10;
+
 router.post('/login/staff', async (req, res) => {
   const parsed = staffLoginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'username and password are required' });
@@ -24,10 +26,18 @@ router.post('/login/staff', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Invalid username or password' });
   if (user.status === 'SUSPENDED') return res.status(403).json({ error: 'Account suspended. Contact admin.' });
 
+  // Account lockout: after MAX_FAILED_ATTEMPTS consecutive wrong passwords,
+  // the account is locked until an admin resets the password or reactivates it.
+  if ((user.failed_attempts || 0) >= MAX_FAILED_ATTEMPTS) {
+    return res.status(423).json({ error: `Account locked after ${MAX_FAILED_ATTEMPTS} failed login attempts. Contact an administrator to reset your password.` });
+  }
+
   const ok = await bcrypt.compare(password, user.password_hash || '');
   if (!ok) {
-    await query(`UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = $1`, [user.id]);
-    return res.status(401).json({ error: 'Invalid username or password' });
+    const attempts = (user.failed_attempts || 0) + 1;
+    await query(`UPDATE users SET failed_attempts = $1 WHERE id = $2`, [attempts, user.id]);
+    const remaining = MAX_FAILED_ATTEMPTS - attempts;
+    return res.status(401).json({ error: 'Invalid username or password', remainingAttempts: remaining });
   }
   await query(`UPDATE users SET failed_attempts = 0, updated_at = now() WHERE id = $1`, [user.id]);
 
@@ -145,7 +155,9 @@ router.post('/change-password', authRequired, async (req, res) => {
 router.get('/me', authRequired, async (req, res) => {
   const user = await one(`SELECT * FROM users WHERE id = $1`, [req.user.id]);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  const { password_hash, ...safe } = user;
+  // Strip sensitive fields — password_hash is internal, google_uid is PII
+  // that the frontend doesn't need for session management.
+  const { password_hash, google_uid, ...safe } = user;
   res.json({ user: safe });
 });
 

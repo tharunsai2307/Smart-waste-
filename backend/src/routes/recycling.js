@@ -1,6 +1,6 @@
 const express = require('express');
 const { z } = require('zod');
-const { query, one } = require('../db');
+const { query, one, getDb } = require('../db');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { genCode } = require('../utils/codes');
 
@@ -67,15 +67,21 @@ router.post('/batches/:id/classify', authRequired, requireRole('ADMIN', 'RECYCLI
     return res.status(400).json({ error: `Classified weight (${totalClassified}kg) exceeds batch input weight (${batch.input_weight_kg}kg)` });
   }
 
-  await query(`DELETE FROM waste_classifications WHERE batch_id = $1`, [batch.id]);
-  for (const c of parsed.data.classifications) {
-    await query(
-      `INSERT INTO waste_classifications (batch_id, category, weight_kg, market_rate_per_kg, recovery_value)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [batch.id, c.category, c.weightKg, c.marketRatePerKg, c.weightKg * c.marketRatePerKg]
-    );
-  }
-  const updated = await one(`UPDATE recycling_batches SET status='CLASSIFIED' WHERE id=$1 RETURNING *`, [batch.id]);
+  // Delete + re-insert in one transaction so a failure doesn't leave
+  // classifications partially deleted.
+  const db = await getDb();
+  const updated = await db.transaction(async (tx) => {
+    await tx.query(`DELETE FROM waste_classifications WHERE batch_id = $1`, [batch.id]);
+    for (const c of parsed.data.classifications) {
+      await tx.query(
+        `INSERT INTO waste_classifications (batch_id, category, weight_kg, market_rate_per_kg, recovery_value)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [batch.id, c.category, c.weightKg, c.marketRatePerKg, c.weightKg * c.marketRatePerKg]
+      );
+    }
+    const res = await tx.query(`UPDATE recycling_batches SET status='CLASSIFIED' WHERE id=$1 RETURNING *`, [batch.id]);
+    return res.rows[0];
+  });
   res.json({ batch: updated });
 });
 

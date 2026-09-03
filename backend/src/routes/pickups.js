@@ -93,12 +93,35 @@ async function tryAutoAssign(request) {
 router.patch('/:id/assign', authRequired, requireRole('ADMIN', 'LOCAL_HUB_MANAGER'), async (req, res) => {
   const { cleanerId } = req.body;
   if (!cleanerId) return res.status(400).json({ error: 'cleanerId is required' });
-  const request = await one(
+
+  const request = await one(`SELECT * FROM pickup_requests WHERE id = $1`, [req.params.id]);
+  if (!request) return res.status(404).json({ error: 'Request not found' });
+
+  // The cleaner must be an ACTIVE cleaner assigned to the same hub as the request.
+  const cleaner = await one(
+    `SELECT id, name, status, local_hub_id FROM users WHERE id = $1 AND role = 'CLEANER'`,
+    [cleanerId]
+  );
+  if (!cleaner) return res.status(404).json({ error: 'Cleaner not found' });
+  if (cleaner.status !== 'ACTIVE') return res.status(409).json({ error: 'This cleaner account is not active' });
+  if (request.local_hub_id && cleaner.local_hub_id !== request.local_hub_id) {
+    return res.status(400).json({ error: 'This cleaner is assigned to a different hub' });
+  }
+
+  // Hub manager can only assign cleaners to their own hub's requests.
+  if (req.user.role === 'LOCAL_HUB_MANAGER' && request.local_hub_id && req.user.localHubId !== request.local_hub_id) {
+    return res.status(403).json({ error: 'Not your hub' });
+  }
+
+  if (!['PENDING', 'ASSIGNED', 'MISSED'].includes(request.status)) {
+    return res.status(409).json({ error: `Cannot assign a request with status ${request.status}` });
+  }
+
+  const updated = await one(
     `UPDATE pickup_requests SET status='ASSIGNED', assigned_cleaner_id=$1, assigned_at=now() WHERE id=$2 RETURNING *`,
     [cleanerId, req.params.id]
   );
-  if (!request) return res.status(404).json({ error: 'Request not found' });
-  res.json({ request });
+  res.json({ request: updated });
 });
 
 /** Resident cancels their own pending/assigned request. */

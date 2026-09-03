@@ -39,13 +39,24 @@ router.get('/:id', authRequired, async (req, res) => {
   res.json({ vehicle });
 });
 
+const VEHICLE_STATUSES = ['IDLE', 'ASSIGNED', 'EN_ROUTE', 'MAINTENANCE', 'OUT_OF_SERVICE'];
+
 /** Update load capacity — viewable/updatable from each local hub per requirements. */
 router.patch('/:id', authRequired, requireRole('ADMIN', 'RECYCLING_MANAGER', 'LOCAL_HUB_MANAGER'), async (req, res) => {
   const fields = [];
   const values = [];
   let idx = 1;
-  if (req.body.capacityKg !== undefined) { fields.push(`capacity_kg = $${idx++}`); values.push(req.body.capacityKg); }
-  if (req.body.status !== undefined) { fields.push(`status = $${idx++}`); values.push(req.body.status); }
+  if (req.body.capacityKg !== undefined) {
+    const v = Number(req.body.capacityKg);
+    if (!v || v <= 0) return res.status(400).json({ error: 'capacityKg must be positive' });
+    fields.push(`capacity_kg = $${idx++}`); values.push(v);
+  }
+  if (req.body.status !== undefined) {
+    if (!VEHICLE_STATUSES.includes(req.body.status)) {
+      return res.status(400).json({ error: `Invalid vehicle status. Must be one of: ${VEHICLE_STATUSES.join(', ')}` });
+    }
+    fields.push(`status = $${idx++}`); values.push(req.body.status);
+  }
   if (!fields.length) return res.status(400).json({ error: 'No updatable fields provided' });
   values.push(req.params.id);
   const vehicle = await one(`UPDATE vehicles SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`, values);

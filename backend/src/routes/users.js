@@ -106,11 +106,69 @@ router.get('/drivers', authRequired, requireRole('ADMIN', 'RECYCLING_MANAGER'), 
 router.patch('/:id/status', authRequired, requireRole('ADMIN'), async (req, res) => {
   const { status } = req.body;
   if (!['ACTIVE', 'SUSPENDED'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
-  const user = await one(`UPDATE users SET status=$1, updated_at=now() WHERE id=$2 RETURNING id, role, name, status`, [status, req.params.id]);
+  const user = await one(`UPDATE users SET status=$1, failed_attempts=0, updated_at=now() WHERE id=$2 RETURNING id, role, name, status`, [status, req.params.id]);
   if (!user) return res.status(404).json({ error: 'User not found' });
   await query(`INSERT INTO audit_log (actor_id, action, entity_type, entity_id, detail) VALUES ($1,'SET_USER_STATUS','user',$2,$3)`, [
     req.user.id, user.id, JSON.stringify({ status }),
   ]);
+  res.json({ user });
+});
+
+/**
+ * Admin: update a user's profile fields (name, email, phone, hub assignment).
+ * Hub reassignment is transactional — the old hub's manager link is cleared
+ * if the moved user was the manager, and the new hub's manager_id is set if
+ * the user is a LOCAL_HUB_MANAGER.
+ */
+const updateStaffSchema = z.object({
+  name: z.string().min(1).optional(),
+  email: z.string().email().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  localHubId: z.number().optional().nullable(),
+  recyclingHubId: z.number().optional().nullable(),
+});
+
+router.patch('/:id', authRequired, requireRole('ADMIN'), async (req, res) => {
+  const parsed = updateStaffSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
+  const p = parsed.data;
+
+  const target = await one(`SELECT * FROM users WHERE id = $1`, [req.params.id]);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+
+  const fields = [];
+  const values = [];
+  let idx = 1;
+  if (p.name !== undefined) { fields.push(`name = $${idx++}`); values.push(p.name); }
+  if (p.email !== undefined) { fields.push(`email = $${idx++}`); values.push(p.email); }
+  if (p.phone !== undefined) { fields.push(`phone = $${idx++}`); values.push(p.phone); }
+  if (p.localHubId !== undefined) { fields.push(`local_hub_id = $${idx++}`); values.push(p.localHubId); }
+  if (p.recyclingHubId !== undefined) { fields.push(`recycling_hub_id = $${idx++}`); values.push(p.recyclingHubId); }
+  if (!fields.length) return res.status(400).json({ error: 'No updatable fields provided' });
+
+  fields.push(`updated_at = now()`);
+  values.push(target.id);
+  const user = await one(`UPDATE users SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, role, name, username, email, phone, status, local_hub_id, recycling_hub_id`, values);
+
+  // If the user is a LOCAL_HUB_MANAGER and we changed their hub, update the
+  // hub's manager_id to point to them.
+  if (p.localHubId !== undefined && target.role === 'LOCAL_HUB_MANAGER') {
+    if (p.localHubId) {
+      await query(`UPDATE local_hubs SET manager_id = $1 WHERE id = $2`, [target.id, p.localHubId]);
+    }
+    if (target.local_hub_id && target.local_hub_id !== p.localHubId) {
+      await query(`UPDATE local_hubs SET manager_id = NULL WHERE manager_id = $1 AND id = $2`, [target.id, target.local_hub_id]);
+    }
+  }
+  if (p.recyclingHubId !== undefined && target.role === 'RECYCLING_MANAGER') {
+    if (p.recyclingHubId) {
+      await query(`UPDATE recycling_hubs SET manager_id = $1 WHERE id = $2`, [target.id, p.recyclingHubId]);
+    }
+    if (target.recycling_hub_id && target.recycling_hub_id !== p.recyclingHubId) {
+      await query(`UPDATE recycling_hubs SET manager_id = NULL WHERE manager_id = $1 AND id = $2`, [target.id, target.recycling_hub_id]);
+    }
+  }
+
   res.json({ user });
 });
 

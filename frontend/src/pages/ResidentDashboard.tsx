@@ -10,6 +10,7 @@ const WASTE_TYPES: WasteType[] = ['MIXED', 'PLASTIC', 'PAPER', 'METAL', 'E_WASTE
 const ResidentDashboard: React.FC = () => {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ['dashboard-resident'], queryFn: dashboardApi.resident, refetchInterval: 10000 });
+  const { data: allPickups } = useQuery({ queryKey: ['my-pickups-resident'], queryFn: () => pickupsApi.list(), refetchInterval: 15000 });
 
   const [form, setForm] = useState({ addressLine: '', wasteType: 'MIXED' as WasteType, estimatedKg: '5', notes: '' });
   const [showForm, setShowForm] = useState<'ON_DEMAND' | 'MISSED_REPORT' | null>(null);
@@ -38,6 +39,8 @@ const ResidentDashboard: React.FC = () => {
   if (!data) return null;
 
   const { profile, recentCollections, activeRequests } = data;
+  const allRequests = allPickups?.requests || [];
+  const pastRequests = allRequests.filter((r) => ['COLLECTED', 'MISSED', 'CANCELLED'].includes(r.status));
 
   return (
     <div className="space-y-6">
@@ -108,6 +111,23 @@ const ResidentDashboard: React.FC = () => {
           </div>
         )}
       </Card>
+
+      {pastRequests.length > 0 && (
+        <Card>
+          <div className="text-white font-semibold text-sm mb-4">Pickup history</div>
+          <div className="space-y-2">
+            {pastRequests.slice(0, 20).map((r) => (
+              <div key={r.id} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">
+                <div>
+                  <div className="text-sm text-white">{r.waste_type.replace(/_/g, ' ')} · {r.address_line}</div>
+                  <div className="text-[11px] text-slate-500">{r.request_type.replace(/_/g, ' ')} · {new Date(r.created_at).toLocaleString()}</div>
+                </div>
+                <Badge status={r.status} />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 };

@@ -32,6 +32,10 @@ export const usersApi = {
   hubCleaners: (hubId: number) => apiClient.get<{ cleaners: StaffUser[] }>(`/users/hub/${hubId}/cleaners`),
   drivers: () => apiClient.get<{ drivers: DriverListItem[] }>('/users/drivers'),
   setStatus: (id: number, status: 'ACTIVE' | 'SUSPENDED') => apiClient.patch<{ user: StaffUser }>(`/users/${id}/status`, { status }),
+  updateStaff: (id: number, payload: {
+    name?: string; email?: string | null; phone?: string | null;
+    localHubId?: number | null; recyclingHubId?: number | null;
+  }) => apiClient.patch<{ user: StaffUser }>(`/users/${id}`, payload),
   resetPassword: (id: number, newPassword?: string) =>
     apiClient.post<{ user: StaffUser; password: string; mustChangePassword: boolean }>(
       `/users/${id}/reset-password`,
