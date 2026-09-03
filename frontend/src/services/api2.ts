@@ -5,6 +5,7 @@ import type {
   AuthUser, LocalHub, RecyclingHub, Vehicle, PickupRequest, Collection,
   Transfer, TransferEvent, RecyclingBatch, WasteClassification, AlertItem,
   StaffUser, DriverListItem, ResidentProfile, Role, WasteType, PickupType,
+  UserDetail, AuditEntry,
 } from '../types/api';
 
 export const authApi = {
@@ -31,7 +32,14 @@ export const usersApi = {
   hubCleaners: (hubId: number) => apiClient.get<{ cleaners: StaffUser[] }>(`/users/hub/${hubId}/cleaners`),
   drivers: () => apiClient.get<{ drivers: DriverListItem[] }>('/users/drivers'),
   setStatus: (id: number, status: 'ACTIVE' | 'SUSPENDED') => apiClient.patch<{ user: StaffUser }>(`/users/${id}/status`, { status }),
-  resetPassword: (id: number, newPassword: string) => apiClient.post<{ success: boolean }>(`/users/${id}/reset-password`, { newPassword }),
+  resetPassword: (id: number, newPassword?: string) =>
+    apiClient.post<{ user: StaffUser; password: string; mustChangePassword: boolean }>(
+      `/users/${id}/reset-password`,
+      newPassword ? { newPassword } : {}
+    ),
+  detail: (id: number) => apiClient.get<UserDetail>(`/users/${id}`),
+  deleteUser: (id: number) =>
+    apiClient.del<{ success: boolean; deleted: { id: number; name: string; username?: string; role: string } }>(`/users/${id}`),
 };
 
 export const hubsApi = {
@@ -104,6 +112,17 @@ export const alertsApi = {
   list: (status: string = 'ACTIVE') => apiClient.get<{ alerts: AlertItem[] }>(`/alerts?status=${status}`),
   acknowledge: (id: number) => apiClient.patch<{ alert: AlertItem }>(`/alerts/${id}/acknowledge`, {}),
   resolve: (id: number) => apiClient.patch<{ alert: AlertItem }>(`/alerts/${id}/resolve`, {}),
+};
+
+export const activityApi = {
+  list: (params?: { action?: string; q?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.action) qs.set('action', params.action);
+    if (params?.q) qs.set('q', params.q);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    const s = qs.toString();
+    return apiClient.get<{ activity: AuditEntry[]; counts: { action: string; n: number }[] }>(s ? `/activity?${s}` : '/activity');
+  },
 };
 
 export const dashboardApi = {

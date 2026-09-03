@@ -79,3 +79,31 @@ export const EmptyState: React.FC<{ message: string; hint?: string }> = ({ messa
     {hint && <div className="text-xs mt-1 text-slate-600">{hint}</div>}
   </div>
 );
+
+export const DangerButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className = '', children, ...rest }) => (
+  <button
+    {...rest}
+    className={`px-4 py-2 rounded-lg text-xs font-semibold tracking-wide bg-rose-500 text-white hover:bg-rose-400 transition-all disabled:opacity-50 ${className}`}
+  >
+    {children}
+  </button>
+);
+
+export const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }> = ({ title, onClose, children, wide }) => (
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    style={{ background: 'rgba(2,6,23,0.78)' }}
+    onClick={onClose}
+  >
+    <div
+      className={`glass p-6 rounded-2xl w-full ${wide ? 'max-w-3xl' : 'max-w-md'} max-h-[85vh] overflow-y-auto`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-white font-semibold text-sm">{title}</div>
+        <button onClick={onClose} className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 text-xs">✕</button>
+      </div>
+      {children}
+    </div>
+  </div>
+);

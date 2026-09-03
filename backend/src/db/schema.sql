@@ -139,8 +139,8 @@ CREATE TABLE IF NOT EXISTS pickup_requests (
 CREATE TABLE IF NOT EXISTS collections (
     id                  SERIAL PRIMARY KEY,
     pickup_request_id   INTEGER REFERENCES pickup_requests(id),
-    cleaner_id          INTEGER NOT NULL REFERENCES users(id),
-    resident_id         INTEGER REFERENCES users(id),
+    cleaner_id          INTEGER REFERENCES users(id),      -- nullable: anonymized if the cleaner's account is deleted
+    resident_id         INTEGER REFERENCES users(id),     -- nullable: anonymized if the resident's account is deleted
     local_hub_id        INTEGER NOT NULL REFERENCES local_hubs(id),
     waste_type          TEXT NOT NULL,
     weight_kg           DOUBLE PRECISION NOT NULL,
@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS transfers (
     id                      SERIAL PRIMARY KEY,
     local_hub_id            INTEGER NOT NULL REFERENCES local_hubs(id),
     recycling_hub_id        INTEGER REFERENCES recycling_hubs(id),
-    requested_by            INTEGER NOT NULL REFERENCES users(id),   -- local hub manager (or admin)
+    requested_by            INTEGER REFERENCES users(id),   -- local hub manager (or admin); nullable: anonymized on account deletion
     vehicle_id              INTEGER REFERENCES vehicles(id),
     driver_id               INTEGER REFERENCES users(id),
     assigned_by             INTEGER REFERENCES users(id),            -- recycling manager / admin

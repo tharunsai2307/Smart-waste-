@@ -47,6 +47,14 @@ async function runMigrations() {
   } else {
     console.log('[db] Schema already present, skipping migration.');
   }
+
+  // v3 (account lifecycle): historical rows reference the staff who created
+  // them via NOT NULL FKs (collections.cleaner_id, transfers.requested_by),
+  // which would make any account with history impossible to delete. Make the
+  // columns nullable so deletion can anonymize history (SET NULL) instead of
+  // destroying it. DROP NOT NULL is idempotent — safe to run on every boot.
+  await db.exec(`ALTER TABLE collections ALTER COLUMN cleaner_id DROP NOT NULL;`);
+  await db.exec(`ALTER TABLE transfers ALTER COLUMN requested_by DROP NOT NULL;`);
 }
 
 module.exports = { getDb, query, one, runMigrations };

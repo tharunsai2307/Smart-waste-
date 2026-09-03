@@ -10,6 +10,7 @@ import ForcePasswordChange from './pages/ForcePasswordChange';
 import CompleteProfile from './pages/CompleteProfile';
 import DashboardRouter from './pages/DashboardRouter';
 import StaffManagement from './pages/StaffManagement';
+import ActivityLog from './pages/ActivityLog';
 import LocalHubsPage from './pages/LocalHubsPage';
 import RecyclingHubsPage from './pages/RecyclingHubsPage';
 import VehiclesPage from './pages/VehiclesPage';
@@ -47,6 +48,7 @@ function AppContent() {
           <Route path="/" element={<ProtectedRoute><AppShellV2 /></ProtectedRoute>}>
             <Route index element={<DashboardRouter />} />
             <Route path="staff" element={<StaffManagement />} />
+            <Route path="activity" element={<ActivityLog />} />
             <Route path="hubs" element={<LocalHubsPage />} />
             <Route path="recycling-hubs" element={<RecyclingHubsPage />} />
             <Route path="vehicles" element={<VehiclesPage />} />

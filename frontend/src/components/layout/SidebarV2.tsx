@@ -2,7 +2,7 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  LayoutDashboard, Warehouse, Recycle, Truck, Users, Bell, LogOut, ClipboardList, MapPinned,
+  LayoutDashboard, Warehouse, Recycle, Truck, Users, Bell, LogOut, ClipboardList, MapPinned, ScrollText,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
@@ -13,6 +13,7 @@ interface NavItem { path: string; label: string; icon: LucideIcon; roles: Role[]
 const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard, roles: ['ADMIN', 'LOCAL_HUB_MANAGER', 'CLEANER', 'RECYCLING_MANAGER', 'DRIVER', 'RESIDENT'] },
   { path: '/staff', label: 'Staff & Accounts', icon: Users, roles: ['ADMIN'] },
+  { path: '/activity', label: 'Activity Log', icon: ScrollText, roles: ['ADMIN'] },
   { path: '/hubs', label: 'Local Hubs', icon: Warehouse, roles: ['ADMIN', 'LOCAL_HUB_MANAGER'] },
   { path: '/recycling-hubs', label: 'Recycling Hubs', icon: Recycle, roles: ['ADMIN', 'RECYCLING_MANAGER'] },
   { path: '/vehicles', label: 'Vehicles', icon: Truck, roles: ['ADMIN', 'RECYCLING_MANAGER', 'LOCAL_HUB_MANAGER'] },

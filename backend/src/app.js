@@ -14,6 +14,7 @@ const vehicleRoutes = require('./routes/vehicles');
 const recyclingRoutes = require('./routes/recycling');
 const alertRoutes = require('./routes/alerts');
 const dashboardRoutes = require('./routes/dashboard');
+const activityRoutes = require('./routes/activity');
 
 const app = express();
 app.use(cors());
@@ -31,6 +32,7 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/recycling', recyclingRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/activity', activityRoutes);
 
 app.use((err, req, res, next) => {
   console.error('[unhandled error]', err);

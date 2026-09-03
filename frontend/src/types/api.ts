@@ -106,6 +106,8 @@ export interface Collection {
   weight_kg: number;
   eco_points_awarded: number;
   collected_at: string;
+  hub_name?: string;
+  resident_name?: string;
 }
 
 export type TransferStatus =
@@ -116,7 +118,7 @@ export interface Transfer {
   id: number;
   local_hub_id: number;
   recycling_hub_id?: number;
-  requested_by: number;
+  requested_by?: number | null; // null when the requester's account was deleted (history anonymized)
   vehicle_id?: number;
   driver_id?: number;
   assigned_by?: number;
@@ -197,7 +199,52 @@ export interface StaffUser {
   status: 'ACTIVE' | 'SUSPENDED';
   local_hub_id?: number;
   recycling_hub_id?: number;
+  must_change_password?: boolean;
+  failed_attempts?: number;
   created_at: string;
+}
+
+export interface AuditEntry {
+  id: number;
+  action: string;
+  entity_type?: string | null;
+  entity_id?: number | null;
+  detail?: Record<string, unknown> | null;
+  created_at: string;
+  actor_id?: number | null;
+  actor_name?: string | null;
+  actor_role?: string | null;
+}
+
+export interface UserDetail {
+  user: StaffUser & {
+    profile_complete?: boolean;
+    local_hub_name?: string | null;
+    recycling_hub_name?: string | null;
+    created_by_name?: string | null;
+    updated_at?: string;
+  };
+  resident_profile?: ResidentProfile | null;
+  driver_profile?: {
+    license_number?: string | null;
+    license_expiry?: string | null;
+    employment_status?: string;
+    availability?: string;
+    total_trips?: number;
+    total_kg_hauled?: number;
+  } | null;
+  stats: {
+    collections_as_cleaner: number;
+    kg_collected: number;
+    pickups_requested: number;
+    transfers_requested: number;
+    transfers_driven: number;
+    batches_created: number;
+  };
+  recent_collections?: Collection[];
+  recent_pickups?: PickupRequest[];
+  recent_ledger?: { id: number; points: number; reason: string; created_at: string }[];
+  activity?: AuditEntry[];
 }
 
 export interface DriverListItem {
